@@ -1,0 +1,31 @@
+# Environment variables (sensitive credentials)
+.env
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Database files
+*.db
+*.sqlite3
+
+# Generated reports (runtime output)
+reports/
+
+# Claude Code settings
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
