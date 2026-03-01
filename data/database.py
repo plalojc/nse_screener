@@ -10,6 +10,7 @@ from config import DB_PATH
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")   # enforce FK constraints
     return conn
 
 
@@ -17,15 +18,25 @@ def init_db():
     conn = get_conn()
     cur  = conn.cursor()
 
+    # ── instruments: master symbol reference table ────────────────────────────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS instruments (
+            symbol          TEXT PRIMARY KEY,
+            instrument_key  TEXT NOT NULL,
+            instrument_name TEXT
+        )
+    """)
+
+    # ── ohlcv: price data only; symbol FK → instruments ─────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ohlcv (
-            symbol      TEXT,
-            date        TEXT,
-            open        REAL,
-            high        REAL,
-            low         REAL,
-            close       REAL,
-            volume      INTEGER,
+            symbol  TEXT REFERENCES instruments(symbol),
+            date    TEXT,
+            open    REAL,
+            high    REAL,
+            low     REAL,
+            close   REAL,
+            volume  INTEGER,
             PRIMARY KEY (symbol, date)
         )
     """)
@@ -148,10 +159,28 @@ def init_db():
     print("[DB] Tables initialized.")
 
 
+def save_instruments(df: pd.DataFrame):
+    """
+    Upsert all NSE EQ instruments into the instruments table.
+    *df* must have columns: symbol, instrument_key, name  (from fetch_nse_instruments).
+    """
+    conn = get_conn()
+    cur  = conn.cursor()
+    for _, row in df.iterrows():
+        cur.execute("""
+            INSERT INTO instruments (symbol, instrument_key, instrument_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                instrument_key  = excluded.instrument_key,
+                instrument_name = excluded.instrument_name
+        """, (row["symbol"], row["instrument_key"], row.get("name", "")))
+    conn.commit()
+    conn.close()
+
+
 def save_ohlcv(symbol: str, df: pd.DataFrame):
     """Upsert OHLCV rows for a symbol (delete-then-insert per symbol)."""
     conn = get_conn()
-    # Delete existing rows for this symbol only – keeps all other symbols intact
     conn.execute("DELETE FROM ohlcv WHERE symbol=?", (symbol,))
     df = df.copy()
     df["symbol"] = symbol
@@ -194,6 +223,42 @@ def load_ohlcv(symbol: str) -> pd.DataFrame:
     conn.close()
     df["date"] = pd.to_datetime(df["date"])
     return df
+
+
+def load_ohlcv_upto(symbol: str, upto_date: str) -> pd.DataFrame:
+    """Load OHLCV rows for *symbol* with date <= *upto_date* (backtesting: no future leakage)."""
+    conn = get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM ohlcv WHERE symbol=? AND date<=? ORDER BY date",
+        conn, params=(symbol, upto_date)
+    )
+    conn.close()
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def load_ohlcv_range(symbol: str, from_date: str, to_date: str) -> pd.DataFrame:
+    """Load OHLCV rows strictly AFTER *from_date* up to and including *to_date*.
+    Used to fetch the forward-looking candles for backtest outcome evaluation.
+    """
+    conn = get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM ohlcv WHERE symbol=? AND date>? AND date<=? ORDER BY date",
+        conn, params=(symbol, from_date, to_date)
+    )
+    conn.close()
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def get_symbols_with_data_upto(upto_date: str) -> list:
+    """Return all symbols that have at least one OHLCV row on or before *upto_date*."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT symbol FROM ohlcv WHERE date <= ?", (upto_date,)
+    ).fetchall()
+    conn.close()
+    return [r["symbol"] for r in rows]
 
 
 def save_signal(symbol, signal_type, price, reason):

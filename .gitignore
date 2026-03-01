@@ -1,31 +1,42 @@
-# Environment variables (sensitive credentials)
-.env
-
-# Virtual environment
-venv/
-.venv/
-env/
-
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
 
-# Database files
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment / secrets  ← NEVER commit real keys
+.env
+
+# Database (local SQLite data – not shared)
 *.db
+*.sqlite
 *.sqlite3
 
-# Generated reports (runtime output)
+# Generated reports (large, rebuilt on each scan)
 reports/
 
-# Claude Code settings
-.claude/
+# Instruments cache (downloaded fresh each run)
+*.json.gz
+instruments_cache/
 
-# OS files
+# Zip archives / backups
+*.zip
+
+# OS
 .DS_Store
 Thumbs.db
 
-# IDE
+# IDEs
 .vscode/
 .idea/
+*.swp

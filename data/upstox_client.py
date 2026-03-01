@@ -15,18 +15,20 @@ HEADERS = {
     "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
 }
 
-# Module-level cache: trading_symbol -> instrument_key (loaded once per run)
-_INSTRUMENT_MAP: dict = {}
+# Module-level caches (loaded once per process)
+_INSTRUMENT_MAP:      dict = {}   # trading_symbol -> instrument_key
+_INSTRUMENT_NAME_MAP: dict = {}   # trading_symbol -> company name
 
 
 def _load_instrument_map() -> dict:
     """
-    Download NSE instruments JSON from Upstox and build a
-    { trading_symbol -> instrument_key } lookup.
-    instrument_key format is 'NSE_EQ|<ISIN>' (e.g. 'NSE_EQ|INE002A01018').
-    Result is cached in _INSTRUMENT_MAP for the lifetime of the process.
+    Download NSE instruments JSON from Upstox and build:
+      _INSTRUMENT_MAP      : { trading_symbol -> instrument_key }
+      _INSTRUMENT_NAME_MAP : { trading_symbol -> company name }
+    instrument_key format: 'NSE_EQ|<ISIN>'  (e.g. 'NSE_EQ|INE002A01018')
+    Both caches are populated once per process lifetime.
     """
-    global _INSTRUMENT_MAP
+    global _INSTRUMENT_MAP, _INSTRUMENT_NAME_MAP
     if _INSTRUMENT_MAP:
         return _INSTRUMENT_MAP
 
@@ -36,17 +38,22 @@ def _load_instrument_map() -> dict:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         data = json.loads(gzip.decompress(resp.content))
-        _INSTRUMENT_MAP = {
-            item["trading_symbol"]: item["instrument_key"]
-            for item in data
-            if item.get("instrument_type") == "EQ"
-        }
+        eq_items = [item for item in data if item.get("instrument_type") == "EQ"]
+        _INSTRUMENT_MAP      = {item["trading_symbol"]: item["instrument_key"]         for item in eq_items}
+        _INSTRUMENT_NAME_MAP = {item["trading_symbol"]: item.get("name", "")           for item in eq_items}
         print(f"[Instruments] Loaded {len(_INSTRUMENT_MAP)} EQ instruments.")
     except Exception as e:
         print(f"[Instruments] Failed to load instrument map: {e}")
-        _INSTRUMENT_MAP = {}
+        _INSTRUMENT_MAP      = {}
+        _INSTRUMENT_NAME_MAP = {}
 
     return _INSTRUMENT_MAP
+
+
+def get_instrument_name(symbol: str) -> str:
+    """Return the company name for an NSE EQ symbol (empty string if unknown)."""
+    _load_instrument_map()
+    return _INSTRUMENT_NAME_MAP.get(symbol, "")
 
 
 def get_instrument_key(symbol: str) -> str:

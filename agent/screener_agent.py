@@ -10,7 +10,8 @@ from colorama import Fore, Style, init
 from data.database       import (init_db, save_ohlcv, save_signal,
                                   open_position, get_open_positions,
                                   ohlcv_latest_date, load_ohlcv,
-                                  save_breakout_log, get_ohlcv_date_map)
+                                  save_breakout_log, get_ohlcv_date_map,
+                                  save_instruments)
 from data.upstox_client  import fetch_historical, fetch_nse_instruments
 from analysis.breakout_scanner import is_breakout, is_ma_pullback
 from analysis.news_fetcher     import fetch_and_store_news, get_news_for_symbol
@@ -29,6 +30,25 @@ init(autoreset=True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _ensure_instruments(symbols: list):
+    """
+    Upsert a minimal instruments row for each symbol in a custom list.
+    Used when the caller passes symbols directly (bypassing fetch_nse_instruments).
+    Keeps the instruments table consistent so the ohlcv FK is always satisfied.
+    """
+    from data.upstox_client import get_instrument_key, get_instrument_name
+    rows = []
+    for sym in symbols:
+        try:
+            ikey = get_instrument_key(sym)
+        except KeyError:
+            ikey = ""
+        rows.append({"symbol": sym, "instrument_key": ikey, "name": get_instrument_name(sym)})
+    if rows:
+        import pandas as pd
+        save_instruments(pd.DataFrame(rows))
+
 
 def _effective_scan_date(scan_date: str = None) -> str:
     """
@@ -106,12 +126,15 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     if symbols:
         universe = symbols
         print(Fore.YELLOW + f"\n[3/5] Scanning {len(universe)} provided symbols...")
+        # Ensure every custom symbol has a row in instruments (FK safety)
+        _ensure_instruments(symbols)
     else:
         print(Fore.YELLOW + "\n[3/5] Loading NSE EQ universe...")
         instruments_df = fetch_nse_instruments()
         if instruments_df.empty:
             print(Fore.RED + "  [ERROR] Could not load NSE instruments. Aborting scan.")
             return []
+        save_instruments(instruments_df)   # persist symbol/key/name to instruments table
         universe = instruments_df["symbol"].tolist()
         print(f"  Universe: {len(universe)} NSE EQ instruments.")
 

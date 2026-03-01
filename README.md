@@ -15,6 +15,7 @@ An automated stock screener for NSE (India) equities that detects breakout and p
 - [Configuration](#configuration)
 - [Setup & Installation](#setup--installation)
 - [Usage](#usage)
+- [Backtesting & Validation](#backtesting--validation)
 - [Risk Management](#risk-management)
 - [Data Flow](#data-flow)
 
@@ -33,6 +34,8 @@ An automated stock screener for NSE (India) equities that detects breakout and p
 | **Portfolio tracker** | Tracks open positions; exits on profit target, trailing stop, or max hold days |
 | **Breakout log** | Date-wise history of every signal + LLM verdict stored in SQLite |
 | **Scheduler** | APScheduler cron job runs automatically at 09:20 IST Mon–Fri |
+| **Backtesting** | Re-run screener on any past date using cached DB data; validate each signal against real forward price action (WIN / LOSS / OPEN) with an HTML report |
+| **HTML Reports** | Full-colour HTML report generated after every scan and every backtest run |
 
 ---
 
@@ -55,11 +58,16 @@ nse_breakout_agent/
 │   ├── technical.py         # Indicator computation via pandas-ta
 │   ├── breakout_scanner.py  # Breakout + MA pullback signal logic
 │   ├── llm_validator.py     # LLM signal validation (Groq / OpenAI / Gemini)
-│   └── news_fetcher.py      # RSS news fetcher and SQLite cache
+│   ├── news_fetcher.py      # RSS news fetcher and SQLite cache
+│   └── backtester.py        # Past-date signal replay + forward outcome evaluation
 │
-└── data/
-    ├── upstox_client.py     # Upstox v2 REST API client (historical OHLCV)
-    └── database.py          # SQLite layer – all table definitions and CRUD helpers
+├── data/
+│   ├── upstox_client.py     # Upstox v2 REST API client (historical OHLCV)
+│   └── database.py          # SQLite layer – all table definitions and CRUD helpers
+│
+└── report/
+    ├── html_report_writer.py       # HTML report for live scan results
+    └── backtest_report_writer.py   # HTML validation report for backtest results
 ```
 
 ---
@@ -289,7 +297,10 @@ python main.py scan
 # Run full scan (downloads data, detects signals, LLM validates, enters positions)
 python main.py scan
 
-# Scan against a specific past date (backtesting / weekend runs)
+# Force re-download all OHLCV data (bypass cache)
+python main.py scan --force-refresh
+
+# Scan against a specific past date (weekend / manual runs)
 python main.py scan --date 2026-02-27
 
 # View current open portfolio
@@ -303,6 +314,13 @@ python main.py log --days 7
 
 # Run as a scheduled daemon (auto-runs at 09:20 IST Mon–Fri)
 python main.py schedule
+
+# ── Backtesting ──────────────────────────────────────────────────────────
+# Validate signals from 1 Feb 2026 against the next 30 calendar days of data
+python main.py backtest --date 2026-02-01
+
+# Custom forward window (e.g. 15 days)
+python main.py backtest --date 2026-02-01 --days 15
 ```
 
 ### Sample scan output
@@ -339,6 +357,81 @@ python main.py schedule
 │ BREAKOUT  │ RELIANCE │ ₹1284.5 │ 63.2 │ 2.4x │    14 │ Stage2 │ CONFIRM(8/10)│ 20d breakout..│
 ...
 ```
+
+---
+
+## Backtesting & Validation
+
+The backtest command lets you replay the screener on any past date using **only data already in your local SQLite DB** (no API calls, no future leakage), then validate whether each signal actually worked.
+
+### How it works
+
+```
+1.  All symbols cached in the DB with data on or before <signal_date> are loaded.
+2.  Each symbol's history is CAPPED at signal_date  →  no future data is used.
+3.  The same breakout + pullback scanners run on the capped data.
+4.  SL and 2R target are calculated with the exact same logic as the live screener.
+5.  Forward candles (signal_date+1 to signal_date+N) are loaded from the DB.
+6.  Each forward day is walked:
+      intraday HIGH >= 2R target  →  WIN   (recorded on that day)
+      intraday LOW  <= stop loss  →  LOSS  (recorded on that day)
+      neither in N days           →  OPEN
+7.  Stats: max gain %, max drawdown %, final close % are recorded per signal.
+```
+
+### Prerequisites
+
+The DB must already have OHLCV data for the chosen date **and** the forward window.  
+If not, run the live scan for that date first:
+
+```bash
+python main.py scan --date 2026-02-01
+```
+
+### Backtest output
+
+**Console summary:**
+```
+──────────────────── BACKTEST ────────────────────────────
+  Signal date  : 2026-02-01
+  Forward days : 30
+  Data source  : local SQLite DB only (no API calls)
+
+  1847 symbols in DB with data up to 2026-02-01
+  Scanning for signals on 2026-02-01 → evaluating until 2026-03-03 ...
+
+──────────────────── BACKTEST SUMMARY ───────────────────
+  Total signals : 12
+  Win Rate      : 66.7%  (8 WIN / 3 LOSS / 1 OPEN)
+  Avg max gain  : +9.4% (on winning trades)
+  Avg max DD    : -3.1% (on losing trades)
+
+  📄 Backtest report saved → reports\Backtest-2026-02-01-fwd30d.html
+```
+
+**HTML report — `reports/Backtest-<date>-fwd<N>d.html`:**
+
+| Section | Contents |
+|---|---|
+| **Summary cards** | Total, WIN/LOSS/OPEN count, win rate, avg max gain, avg max drawdown, expectancy, avg days to outcome |
+| **Results table** | Every signal: entry, target, SL, RSI, volume, score, outcome, trigger day, max gain %, max drawdown %, final % |
+| **Colour coding** | WIN = green · LOSS = red · OPEN = blue · pct columns colour-coded by value |
+| **Clickable symbols** | Each symbol opens its TradingView NSE chart for manual review |
+
+### Key definitions
+
+| Term | Definition |
+|---|---|
+| **WIN** | Intraday high reached the 2R target before stop loss was hit |
+| **LOSS** | Intraday low hit or broke through the stop loss before target |
+| **OPEN** | Neither triggered within the forward window |
+| **Max Gain %** | Best intraday high vs entry price across all forward candles |
+| **Max DD %** | Worst intraday low vs entry price (negative = drawdown below entry) |
+| **Final %** | % change of last available close vs entry |
+| **Expectancy** | `(win_rate × avg_max_gain) + ((1−win_rate) × avg_max_dd)` |
+
+> **Note:** The backtest does not run LLM validation (would require API calls for historical dates).  
+> All outcomes are determined purely from cached local OHLCV data.
 
 ---
 

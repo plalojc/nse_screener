@@ -17,7 +17,7 @@ UPSTOX_HIST_URL     = "https://api.upstox.com/v2/historical-candle"
 DB_PATH = "nse_agent.db"
 
 # ── Screener settings ─────────────────────────────────────
-LOOKBACK_DAYS        = 90       # days of history to fetch
+LOOKBACK_DAYS        = 365      # days of history to fetch (1 full year)
 VOLUME_SURGE_FACTOR  = 1.5      # volume must be 1.5x 20-day avg
 RSI_BREAKOUT_MIN     = 55       # RSI above this = momentum
 RSI_OVERBOUGHT       = 75       # RSI above this = skip entry
@@ -59,6 +59,11 @@ LLM_PROVIDER  = "groq"
 LLM_MODEL     = "llama-3.3-70b-versatile"
 LLM_BASE_URL  = "https://api.groq.com/openai/v1"
 #
+# ALTERNATIVE  → Ollama (local, no API key, no rate limits):
+#   LLM_PROVIDER  = "ollama"
+#   LLM_MODEL     = "llama3.1:8b"          # or llama3.1:70b if you have the VRAM
+#   (set in .env — no other changes needed)
+#
 # ALTERNATIVE  → Gemini 2.0 Flash (FREE tier): https://aistudio.google.com/apikey
 #   LLM_PROVIDER  = "gemini"
 #   LLM_MODEL     = "gemini-2.0-flash"
@@ -68,22 +73,44 @@ LLM_BASE_URL  = "https://api.groq.com/openai/v1"
 #   LLM_MODEL     = "gpt-4o-mini"
 #   LLM_BASE_URL  = ""   # leave blank for default OpenAI endpoint
 
-LLM_PROVIDER     = os.getenv("LLM_PROVIDER",  "groq")
-LLM_MODEL        = os.getenv("LLM_MODEL",     "llama-3.3-70b-versatile")
-LLM_API_KEY      = os.getenv("LLM_API_KEY",   "")   # set in .env or environment
-LLM_BASE_URL     = os.getenv("LLM_BASE_URL",  "https://api.groq.com/openai/v1")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
+
+# ── Provider-specific defaults (all overridable via .env) ──────────────────
+if LLM_PROVIDER == "ollama":
+    # Local Ollama — no real API key needed; endpoint is always localhost
+    OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    LLM_API_KEY          = os.getenv("LLM_API_KEY",          "ollama")         # any non-empty string
+    LLM_BASE_URL         = os.getenv("LLM_BASE_URL",         OLLAMA_BASE_URL)
+    LLM_MODEL            = os.getenv("LLM_MODEL",            "llama3.1:8b")    # ollama pull llama3.1:8b
+    LLM_PANEL_TECH_MODEL = os.getenv("LLM_PANEL_TECH_MODEL", "llama3.1:8b")
+    LLM_PANEL_SENT_MODEL = os.getenv("LLM_PANEL_SENT_MODEL", "llama3.1:8b")
+    LLM_PANEL_RISK_MODEL = os.getenv("LLM_PANEL_RISK_MODEL", "llama3.1:8b")
+else:
+    # Groq / OpenAI / OpenRouter / Gemini (cloud)
+    LLM_API_KEY          = os.getenv("LLM_API_KEY",          "")
+    LLM_BASE_URL         = os.getenv("LLM_BASE_URL",         "https://api.groq.com/openai/v1")
+    LLM_MODEL            = os.getenv("LLM_MODEL",            "llama-3.3-70b-versatile")
+    LLM_PANEL_TECH_MODEL = os.getenv("LLM_PANEL_TECH_MODEL", "llama-3.3-70b-versatile")
+    LLM_PANEL_SENT_MODEL = os.getenv("LLM_PANEL_SENT_MODEL", "llama-3.1-8b-instant")
+    # 3 different models → 3 separate Groq rate-limit buckets (avoids throttling).
+    # Groq free-tier (2026): llama-3.3-70b=12K TPM, llama-3.1-8b=6K TPM, llama-4-scout=30K TPM.
+    # NOTE: deepseek-r1-distill-llama-70b is NOT on free tier — do not use it.
+    LLM_PANEL_RISK_MODEL = os.getenv("LLM_PANEL_RISK_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+
 LLM_MAX_TOKENS   = 256    # verdict + confidence + one-line reasoning
 LLM_TEMPERATURE  = 0.2    # low temperature for deterministic analysis
 
 # ── Multi-LLM Panel (3-agent ensemble with debate) ─────────────
 # Set USE_MULTI_LLM_PANEL=true to enable; falls back to single LLM if panel fails.
-# All 3 agents use the same LLM_API_KEY / LLM_BASE_URL (Groq free tier recommended).
-# Different models → separate free-tier rate limits → avoids rate-limit failures.
+# All 3 agents use the same LLM_API_KEY / LLM_BASE_URL.
 USE_MULTI_LLM_PANEL  = os.getenv("USE_MULTI_LLM_PANEL", "true").lower() == "true"
-LLM_PANEL_TECH_MODEL = os.getenv("LLM_PANEL_TECH_MODEL", "llama-3.3-70b-versatile")
-LLM_PANEL_SENT_MODEL = os.getenv("LLM_PANEL_SENT_MODEL", "mixtral-8x7b-32768")
-LLM_PANEL_RISK_MODEL = os.getenv("LLM_PANEL_RISK_MODEL", "gemma2-9b-it")
 LLM_PANEL_MAX_TOKENS = int(os.getenv("LLM_PANEL_MAX_TOKENS", "512"))
+
+# Sequential mode: run panel agents one-at-a-time instead of parallel.
+# Use when SENT+RISK share the same model to avoid competing for the same TPM bucket.
+# PANEL_AGENT_DELAY: seconds to wait between agent calls in sequential mode.
+PANEL_SEQUENTIAL_MODE = os.getenv("PANEL_SEQUENTIAL_MODE", "false").lower() == "true"
+PANEL_AGENT_DELAY     = float(os.getenv("PANEL_AGENT_DELAY", "1.0"))
 
 # ── Live Validation (Gemini + Google Search Grounding) ──────────
 # Optional 2nd-pass validation using Gemini with real-time Google Search.

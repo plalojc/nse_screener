@@ -27,6 +27,7 @@
 import json
 import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
@@ -35,6 +36,7 @@ from config import (
     LLM_API_KEY, LLM_BASE_URL, LLM_TEMPERATURE,
     LLM_PANEL_TECH_MODEL, LLM_PANEL_SENT_MODEL, LLM_PANEL_RISK_MODEL,
     LLM_PANEL_MAX_TOKENS, ATR_SL_MULTIPLIER, STOP_LOSS_PCT, MAX_OPEN_POSITIONS,
+    PANEL_SEQUENTIAL_MODE, PANEL_AGENT_DELAY,
 )
 
 logger = logging.getLogger(__name__)
@@ -402,8 +404,9 @@ def _build_debate_context(sig: dict, verdicts: Dict[str, AgentVerdict]) -> str:
 def _call_llm(model: str, system_prompt: str, user_prompt: str,
               client, max_tokens: int = None) -> str:
     """
-    Single OpenAI-compatible LLM call. Returns raw response string.
+    Single OpenAI-compatible LLM call with exponential backoff for 429 rate-limit errors.
     Tries JSON mode first, falls back to plain text mode.
+    Retries up to 4 times on rate-limit errors: waits 1s, 2s, 4s, 8s (capped at 30s).
     """
     if max_tokens is None:
         max_tokens = LLM_PANEL_MAX_TOKENS
@@ -418,19 +421,34 @@ def _call_llm(model: str, system_prompt: str, user_prompt: str,
         temperature=LLM_TEMPERATURE,
     )
 
-    for attempt, use_json in enumerate([True, False]):
-        if use_json:
-            kwargs["response_format"] = {"type": "json_object"}
+    MAX_RETRIES = 4
+    for retry in range(MAX_RETRIES):
+        for attempt, use_json in enumerate([True, False]):
+            if use_json:
+                kwargs["response_format"] = {"type": "json_object"}
+            else:
+                kwargs.pop("response_format", None)
+            try:
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                err = str(e)
+                # JSON mode not supported → drop it and retry immediately (no backoff)
+                if attempt == 0 and ("response_format" in err.lower() or "json_object" in err.lower()):
+                    continue
+                # Rate limit (429) → exponential backoff then retry outer loop
+                if "429" in err or "rate limit" in err.lower() or "rate_limit" in err.lower():
+                    wait = min(2 ** retry, 30)  # 1s, 2s, 4s, 8s … capped at 30s
+                    logger.warning(
+                        f"[Panel] Rate limit on {model} (attempt {retry + 1}/{MAX_RETRIES}), "
+                        f"waiting {wait}s…"
+                    )
+                    time.sleep(wait)
+                    break  # break inner loop → go to next retry
+                raise  # any other error → propagate immediately
         else:
-            kwargs.pop("response_format", None)
-        try:
-            resp = client.chat.completions.create(**kwargs)
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            err = str(e)
-            if attempt == 0 and ("response_format" in err.lower() or "json_object" in err.lower()):
-                continue
-            raise
+            # Inner loop completed without break (no rate-limit hit) → success already returned
+            break
     return ""
 
 
@@ -741,20 +759,28 @@ def run_panel(sig: dict, scan_date: str) -> Optional[PanelVerdict]:
         ("RISK",      LLM_PANEL_RISK_MODEL, _RISK_SYSTEM, risk_prompt),
     ]
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(_call_agent, name, model, sys_p, usr_p, client): name
-            for name, model, sys_p, usr_p in agent_tasks
-        }
-        for future in as_completed(futures, timeout=40):
-            name = futures[future]
-            try:
-                verdicts[name] = future.result()
-            except Exception as e:
-                logger.warning(f"[Panel] {name} future failed: {e}")
-                verdicts[name] = AgentVerdict(agent_name=name, verdict="WEAK",
-                                              confidence=4, reasoning=str(e)[:100],
-                                              failed=True)
+    if PANEL_SEQUENTIAL_MODE:
+        # Sequential mode: one agent at a time with a delay between calls.
+        # Use when SENT+RISK share the same model to avoid competing for the same TPM bucket.
+        for name, model, sys_p, usr_p in agent_tasks:
+            verdicts[name] = _call_agent(name, model, sys_p, usr_p, client)
+            if PANEL_AGENT_DELAY > 0:
+                time.sleep(PANEL_AGENT_DELAY)
+    else:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(_call_agent, name, model, sys_p, usr_p, client): name
+                for name, model, sys_p, usr_p in agent_tasks
+            }
+            for future in as_completed(futures, timeout=60):
+                name = futures[future]
+                try:
+                    verdicts[name] = future.result()
+                except Exception as e:
+                    logger.warning(f"[Panel] {name} future failed: {e}")
+                    verdicts[name] = AgentVerdict(agent_name=name, verdict="WEAK",
+                                                  confidence=4, reasoning=str(e)[:100],
+                                                  failed=True)
 
     # Ensure all three present (defensive)
     for name in ("TECHNICAL", "SENTIMENT", "RISK"):
