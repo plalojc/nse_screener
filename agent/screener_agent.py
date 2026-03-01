@@ -23,7 +23,10 @@ from config import (MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     TOP_PICKS_MIN_VOL, TOP_PICKS_RSI_MAX, REPORT_DIR,
                     USE_MULTI_LLM_PANEL, LLM_PANEL_TECH_MODEL,
                     LLM_PANEL_SENT_MODEL, LLM_PANEL_RISK_MODEL,
-                    USE_LIVE_VALIDATION, LIVE_API_KEY, LIVE_MODEL)
+                    LLM_PANEL_MODERATOR_MODEL,
+                    USE_LIVE_VALIDATION, LIVE_API_KEY, LIVE_MODEL,
+                    GEMINI_SENTIMENT_ENABLED, GEMINI_SENTIMENT_API_KEY,
+                    GEMINI_SENTIMENT_MODEL)
 from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
@@ -190,6 +193,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 print(Fore.CYAN   + f"      TECHNICAL : {LLM_PANEL_TECH_MODEL}")
                 print(Fore.CYAN   + f"      SENTIMENT : {LLM_PANEL_SENT_MODEL}")
                 print(Fore.CYAN   + f"      RISK      : {LLM_PANEL_RISK_MODEL}")
+                print(Fore.CYAN   + f"      MODERATOR : {LLM_PANEL_MODERATOR_MODEL}")
                 from analysis.llm_panel import validate_signals_panel
                 validate_signals_panel(signals, scan_date=target_date)
             else:
@@ -212,23 +216,41 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             save_breakout_log(target_date, sig)
         print(f"  {len(signals)} signal(s) saved to breakout_log.")
 
-        # ── Step 4b – Live Validation via Gemini + Google Search (optional) ──
+        # ── Step 4b – Gemini Sentiment Validation (optional) ────────────────
+        if GEMINI_SENTIMENT_ENABLED and GEMINI_SENTIMENT_API_KEY:
+            confirmable = [s for s in signals
+                           if s.get("llm_verdict") in ("CONFIRM", "WEAK")]
+            if confirmable:
+                print(Fore.YELLOW + f"\n[4b/5] Gemini sentiment validation ({len(confirmable)} signal(s))...")
+                print(Fore.CYAN   + f"       Gemini + Google Search Grounding")
+                print(Fore.CYAN   + f"       Model  : {GEMINI_SENTIMENT_MODEL}")
+                from analysis.gemini_sentiment import validate_signals_gemini
+                validate_signals_gemini(confirmable, scan_date=target_date)
+            else:
+                print(Fore.YELLOW + "\n[4b/5] Gemini validation skipped – no CONFIRM/WEAK signals.")
+        elif GEMINI_SENTIMENT_ENABLED and not GEMINI_SENTIMENT_API_KEY:
+            print(Fore.RED + "\n[4b/5] Gemini validation SKIPPED.")
+            print(Fore.RED + "       Reason: GEMINI_SENTIMENT_API_KEY is not set.")
+            print(Fore.RED + "       Fix   : Add GEMINI_SENTIMENT_API_KEY=your_key to .env")
+            print(Fore.RED + "               (get key at https://aistudio.google.com/apikey)")
+
+        # ── Step 4c – Live Validation via Claude + Web Search (optional) ──
         if USE_LIVE_VALIDATION and LIVE_API_KEY:
             confirmable = [s for s in signals
                            if s.get("llm_verdict") in ("CONFIRM", "WEAK")]
             if confirmable:
-                print(Fore.YELLOW + f"\n[4b/5] Live validation ({len(confirmable)} signal(s))...")
-                print(Fore.CYAN   + f"       Gemini + Google Search Grounding")
+                print(Fore.YELLOW + f"\n[4c/5] Live validation ({len(confirmable)} signal(s))...")
+                print(Fore.CYAN   + f"       Claude + Web Search")
                 print(Fore.CYAN   + f"       Model  : {LIVE_MODEL}")
                 from analysis.live_validator import validate_signals_live
                 validate_signals_live(confirmable, scan_date=target_date)
             else:
-                print(Fore.YELLOW + "\n[4b/5] Live validation skipped – no CONFIRM/WEAK signals.")
+                print(Fore.YELLOW + "\n[4c/5] Live validation skipped – no CONFIRM/WEAK signals.")
         elif USE_LIVE_VALIDATION and not LIVE_API_KEY:
-            print(Fore.RED + "\n[4b/5] Live validation SKIPPED.")
+            print(Fore.RED + "\n[4c/5] Live validation SKIPPED.")
             print(Fore.RED + "       Reason: LIVE_API_KEY is not set.")
             print(Fore.RED + "       Fix   : Add LIVE_API_KEY=your_key to .env")
-            print(Fore.RED + "               (get free key at https://aistudio.google.com/apikey)")
+            print(Fore.RED + "               (get key at https://console.anthropic.com/settings/keys)")
     else:
         for sig in signals:
             sig["scan_date"] = target_date
@@ -411,6 +433,13 @@ def _print_top_picks(signals: list, scan_date: str):
         if s.get("bull_flag_detected"):
             pattern_badges += " [FLAG]"
 
+        # Gemini verdict badge
+        gemini_v = s.get("gemini_verdict")
+        gemini_str = ""
+        if gemini_v and gemini_v not in ("SKIPPED", "", None):
+            gemini_conf = s.get("gemini_confidence") or "?"
+            gemini_str = f"  GEMINI:{gemini_v}({gemini_conf}/10)"
+
         # Live verdict badge
         live_v = s.get("live_verdict")
         live_str = ""
@@ -421,7 +450,7 @@ def _print_top_picks(signals: list, scan_date: str):
         print(verdict_colour +
               f"  #{rank}  {s['symbol']:<12}  ₹{bp:<9.2f}  "
               f"Score:{s['score']}  RSI:{s['rsi']:.0f}  Vol:{s['vol_ratio']:.1f}x  "
-              f"LLM:{s.get('llm_verdict')}({conf}/10){live_str}{pattern_badges}")
+              f"LLM:{s.get('llm_verdict')}({conf}/10){gemini_str}{live_str}{pattern_badges}")
         print(Style.RESET_ALL +
               f"      Entry ₹{bp:.2f}  →  Target ₹{tp:.2f}  →  SL ₹{sl:.2f}  "
               f"(Risk {rr}% | 2R reward)")
@@ -436,12 +465,17 @@ def _print_top_picks(signals: list, scan_date: str):
                   f"SENT:{s.get('sent_verdict','?')}({s.get('sent_confidence','?')}/10) "
                   f"RISK:{s.get('risk_verdict','?')}({s.get('risk_confidence','?')}/10)"
                   f"{debate_str}")
+        # Show Gemini reasoning if available
+        gemini_reasoning = s.get("gemini_reasoning", "")
+        if gemini_reasoning and gemini_v not in ("SKIPPED", "", None):
+            print(Fore.CYAN +
+                  f"      Gemini: {gemini_reasoning[:100]}" + Style.RESET_ALL)
         # Show live reasoning if available
         live_reasoning = s.get("live_reasoning", "")
         if live_reasoning and live_v not in ("SKIPPED", "", None):
             print(Fore.MAGENTA +
                   f"      Live: {live_reasoning[:100]}" + Style.RESET_ALL)
-        elif reasoning:
+        elif not gemini_reasoning and reasoning:
             print(f"      Reasoning: {reasoning[:100]}")
         print()
 

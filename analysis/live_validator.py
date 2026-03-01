@@ -1,15 +1,22 @@
 
 # ============================================================
-# analysis/live_validator.py – Gemini + Google Search Grounding
+# analysis/live_validator.py – Claude + Web Search Validation
 # ============================================================
 # 2nd-pass live validation for breakout signals.
-# Uses Gemini with Google Search to check real-time news before
-# confirming or overriding the Groq panel verdict.
+# Uses Claude Opus 4.6 with server-side web_search tool to check
+# real-time news before confirming or overriding the Groq panel verdict.
 #
-# FREE: 500 grounded searches/day on Gemini Flash.
-# Get API key: https://aistudio.google.com/apikey
+# Model: claude-opus-4-6 (default)
+#   - Server-side web search: $10 per 1,000 searches
+#   - Claude searches the web automatically, cites sources
+#   - max_uses=3 per signal (limits search count per call)
 #
-# Requires: pip install google-genai
+# Rate-limit: Anthropic SDK auto-retries 429s (2x default)
+#             + custom exponential backoff (4s→8s→16s→32s)
+# Cache: same-day re-runs skip API calls (uses DB cache)
+#
+# API key: https://console.anthropic.com/settings/keys
+# Requires: pip install anthropic
 # ============================================================
 
 import json
@@ -26,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── Override Logic ──────────────────────────────────────────────────────────────
-# Panel Verdict | Gemini Verdict | Final Result
+# Panel Verdict | Live Verdict   | Final Result
 # ─────────────────────────────────────────────
 # CONFIRM       | CONFIRM        | CONFIRM   (double confirmed)
 # CONFIRM       | WEAK           | WEAK      (live data lacks conviction)
@@ -53,84 +60,142 @@ def _apply_override(panel_verdict: str, live_verdict: str) -> str:
     )
 
 
-# ── Gemini API Call ─────────────────────────────────────────────────────────────
+# ── Claude + Web Search API Call ──────────────────────────────────────────────
 
 _SYSTEM_INSTRUCTION = (
     "You are a senior equity research analyst specialising in NSE India stocks. "
-    "You have access to Google Search. Always search for the latest news about "
+    "You have access to a web search tool. Always search for the latest news about "
     "the stock before making your assessment. Be factual, cite sources, and "
-    "return ONLY valid JSON in your response."
+    "return ONLY valid JSON in your final response."
 )
 
 
-def _call_gemini_with_search(prompt: str) -> dict:
+def _call_claude_with_search(prompt: str) -> dict:
     """
-    Call Gemini with Google Search grounding enabled.
+    Call Claude with server-side web_search tool enabled.
+    Claude automatically searches the web and returns results with citations.
     Returns parsed dict: {verdict, confidence, reasoning, live_catalysts, live_risks}
     or None on failure.
     """
     try:
-        from google import genai
-        from google.genai import types
+        import anthropic
     except ImportError:
         logger.warning(
-            "[Live] google-genai package not installed. "
-            "Run: pip install google-genai"
+            "[Live] anthropic package not installed. "
+            "Run: pip install anthropic"
         )
         return None
 
     if not LIVE_API_KEY:
+        logger.warning("[Live] LIVE_API_KEY not set.")
         return None
 
-    try:
-        client = genai.Client(api_key=LIVE_API_KEY)
+    client = anthropic.Anthropic(api_key=LIVE_API_KEY)
 
-        # Enable Google Search grounding
-        google_search_tool = types.Tool(
-            google_search=types.GoogleSearch()
-        )
-
-        response = client.models.generate_content(
-            model=LIVE_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[google_search_tool],
-                system_instruction=_SYSTEM_INSTRUCTION,
-                max_output_tokens=512,
-                temperature=0.3,
-            ),
-        )
-
-        # Extract text response
-        raw_text = response.text.strip() if response.text else ""
-
-        # Extract grounding metadata (search sources)
-        sources = []
+    MAX_RETRIES = 4
+    for retry in range(MAX_RETRIES):
         try:
-            gm = response.candidates[0].grounding_metadata
-            if gm and gm.grounding_chunks:
-                for chunk in gm.grounding_chunks:
-                    if hasattr(chunk, "web") and chunk.web:
-                        sources.append({
-                            "title": getattr(chunk.web, "title", ""),
-                            "uri":   getattr(chunk.web, "uri", ""),
-                        })
-        except Exception:
-            pass  # grounding metadata may not always be present
+            response = client.messages.create(
+                model=LIVE_MODEL,
+                max_tokens=1024,
+                system=_SYSTEM_INSTRUCTION,
+                messages=[{"role": "user", "content": prompt}],
+                tools=[{
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 3,
+                    "user_location": {
+                        "type": "approximate",
+                        "country": "IN",
+                        "timezone": "Asia/Kolkata",
+                    },
+                }],
+            )
 
-        # Parse JSON from response
-        parsed = _parse_live_json(raw_text)
-        if parsed:
-            parsed["_sources"] = sources[:5]  # keep top 5 sources
-        return parsed
+            # Handle pause_turn: if Claude paused mid-turn, continue
+            if response.stop_reason == "pause_turn":
+                logger.info("[Live] Claude paused turn, continuing...")
+                # Send response back to let Claude finish
+                response = client.messages.create(
+                    model=LIVE_MODEL,
+                    max_tokens=1024,
+                    system=_SYSTEM_INSTRUCTION,
+                    messages=[
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": response.content},
+                    ],
+                    tools=[{
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 3,
+                        "user_location": {
+                            "type": "approximate",
+                            "country": "IN",
+                            "timezone": "Asia/Kolkata",
+                        },
+                    }],
+                )
 
-    except Exception as e:
-        logger.warning(f"[Live] Gemini call failed: {e}")
-        return None
+            # Extract text from response content blocks
+            raw_text = ""
+            sources = []
+            for block in response.content:
+                if hasattr(block, "type"):
+                    if block.type == "text":
+                        raw_text += block.text
+                        # Extract citations if present
+                        if hasattr(block, "citations") and block.citations:
+                            for citation in block.citations:
+                                if hasattr(citation, "url"):
+                                    sources.append({
+                                        "title": getattr(citation, "title", ""),
+                                        "uri":   getattr(citation, "url", ""),
+                                    })
+
+            raw_text = raw_text.strip()
+
+            # Parse JSON from response
+            parsed = _parse_live_json(raw_text)
+            if parsed:
+                # Deduplicate sources by URL
+                seen = set()
+                unique_sources = []
+                for s in sources:
+                    if s["uri"] not in seen:
+                        seen.add(s["uri"])
+                        unique_sources.append(s)
+                parsed["_sources"] = unique_sources[:5]
+            return parsed
+
+        except Exception as e:
+            err_str = str(e)
+            # Check for rate limit or server errors
+            is_rate_limit = (
+                "429" in err_str or
+                "rate_limit" in err_str.lower() or
+                "rate limit" in err_str.lower() or
+                "overloaded" in err_str.lower()
+            )
+            is_server_error = "500" in err_str or "529" in err_str
+            if is_rate_limit or is_server_error:
+                wait = min(4 * (2 ** retry), 60)  # 4s, 8s, 16s, 32s
+                logger.warning(
+                    f"[Live] Claude {'rate limit' if is_rate_limit else 'server error'} "
+                    f"(attempt {retry + 1}/{MAX_RETRIES}), waiting {wait}s\u2026"
+                )
+                time.sleep(wait)
+                continue
+            # Non-retryable error — log and give up
+            logger.warning(f"[Live] Claude call failed: {e}")
+            return None
+
+    # All retries exhausted
+    logger.warning(f"[Live] Claude API errors persist after {MAX_RETRIES} retries, skipping.")
+    return None
 
 
 def _parse_live_json(raw: str) -> dict:
-    """Parse Gemini response JSON, handling markdown fences and edge cases."""
+    """Parse Claude response JSON, handling markdown fences and edge cases."""
     if not raw:
         return None
 
@@ -177,7 +242,7 @@ def _parse_live_json(raw: str) -> dict:
 
 def validate_with_live_search(sig: dict) -> dict:
     """
-    Validate a single signal using Gemini + Google Search grounding.
+    Validate a single signal using Claude + web search.
 
     Args:
         sig: Signal dict with keys like symbol, close, signal_type, etc.
@@ -198,13 +263,13 @@ def validate_with_live_search(sig: dict) -> dict:
         panel_reasoning=sig.get("llm_reasoning", "N/A"),
     )
 
-    result = _call_gemini_with_search(prompt)
+    result = _call_claude_with_search(prompt)
 
     if result is None:
         return {
             "live_verdict":    "SKIPPED",
             "live_confidence": None,
-            "live_reasoning":  "Gemini call failed or unavailable",
+            "live_reasoning":  "Claude call failed or unavailable",
             "_sources":        [],
         }
 
@@ -222,7 +287,7 @@ def validate_with_live_search(sig: dict) -> dict:
 
 def validate_signals_live(signals: list, scan_date: str):
     """
-    Validate a list of signals using Gemini + Google Search grounding.
+    Validate a list of signals using Claude + web search.
     Only processes CONFIRM/WEAK signals (REJECTs are skipped to save quota).
 
     Mutates each signal dict in-place:
@@ -244,6 +309,8 @@ def validate_signals_live(signals: list, scan_date: str):
 
     total = len(signals)
     overrides = []
+    cached_count = 0
+    api_count    = 0
 
     for idx, sig in enumerate(signals, 1):
         symbol = sig.get("symbol", "?")
@@ -256,8 +323,25 @@ def validate_signals_live(signals: list, scan_date: str):
             sig["live_reasoning"]  = "Panel verdict was REJECT/SKIPPED"
             continue
 
-        # Call Gemini with Google Search
+        # Cache hit — already live-validated today (loaded from breakout_log by panel cache)
+        existing_live = sig.get("live_verdict")
+        if existing_live and existing_live not in ("SKIPPED", "", None):
+            cached_count += 1
+            if existing_live == "CONFIRM":
+                v_color = Fore.GREEN
+            elif existing_live == "REJECT":
+                v_color = Fore.RED
+            else:
+                v_color = Fore.YELLOW
+            print(
+                f"  [Live {idx}/{total}] {symbol:<15} -> "
+                f"{v_color}{existing_live:<7}{Style.RESET_ALL} (cached)"
+            )
+            continue
+
+        # Cache miss — call Claude with web search
         result = validate_with_live_search(sig)
+        api_count += 1
 
         sig["live_verdict"]    = result["live_verdict"]
         sig["live_confidence"] = result["live_confidence"]
@@ -296,12 +380,12 @@ def validate_signals_live(signals: list, scan_date: str):
         # Persist to DB
         save_breakout_log(scan_date, sig)
 
-        # Small delay between API calls to avoid rate limits
+        # Small delay between API calls
         if idx < total:
-            time.sleep(0.5)
+            time.sleep(1.0)
 
     # Summary
     override_str = f"Overrides: {', '.join(overrides)}" if overrides else "No overrides"
     print(
-        f"  [Live] Done. {total} signal(s) validated. {override_str}"
+        f"  [Live] Done. API calls: {api_count} | Cached: {cached_count} | {override_str}"
     )

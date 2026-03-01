@@ -5,19 +5,19 @@
 #
 # Architecture (inspired by TradingAgents 2024-2025 paper):
 #   3 specialist agents run IN PARALLEL (ThreadPoolExecutor):
-#     1. TECHNICAL Analyst  – chart patterns, indicators, stage
-#     2. SENTIMENT Analyst  – news, catalysts, overhangs
-#     3. RISK Manager       – stop loss quality, R:R, tail risks
+#     1. TECHNICAL Analyst  (llama-4-scout)  – chart patterns, indicators, stage
+#     2. SENTIMENT Analyst  (llama-3.1-8b)   – news, catalysts, overhangs
+#     3. RISK Manager       (llama-4-scout)  – stop loss quality, R:R, tail risks
 #
 #   Weighted consensus: TECH×0.40 + SENT×0.35 + RISK×0.25
 #
 #   Bull/Bear DEBATE triggered when agents strongly disagree:
-#     Turn 1 → Bull Researcher argues FOR the trade
-#     Turn 2 → Bear Researcher argues AGAINST
-#     Turn 3 → Fund Manager moderator makes final call
+#     Turn 1 → Bull Researcher  (llama-4-scout)    argues FOR
+#     Turn 2 → Bear Researcher  (llama-4-scout)    argues AGAINST
+#     Turn 3 → Fund Manager     (llama-4-maverick) final CONFIRM/REJECT
 #
-#   All agents use Groq free-tier models (3 different models
-#   → 3 separate rate limit quotas → avoids throttling).
+#   Rate-limit hardening: _call_llm() has exponential backoff (1→2→4→8s)
+#   for 429 errors. PANEL_SEQUENTIAL_MODE=true runs agents one-at-a-time.
 #
 #   Full backward compatibility: always populates sig["llm_verdict"],
 #   sig["llm_confidence"], sig["llm_reasoning"] so existing display
@@ -35,6 +35,7 @@ from typing import Optional, Dict, List
 from config import (
     LLM_API_KEY, LLM_BASE_URL, LLM_TEMPERATURE,
     LLM_PANEL_TECH_MODEL, LLM_PANEL_SENT_MODEL, LLM_PANEL_RISK_MODEL,
+    LLM_PANEL_MODERATOR_MODEL,
     LLM_PANEL_MAX_TOKENS, ATR_SL_MULTIPLIER, STOP_LOSS_PCT, MAX_OPEN_POSITIONS,
     PANEL_SEQUENTIAL_MODE, PANEL_AGENT_DELAY,
 )
@@ -294,7 +295,17 @@ Perform your step-by-step technical analysis and return the JSON verdict.
 """.strip()
 
 
-def _build_sent_prompt(sig: dict, sentiment_report_text: str, news_headlines: str) -> str:
+def _build_sent_prompt(sig: dict, sentiment_report_text: str, news_headlines: str,
+                       marketaux_text: str = "") -> str:
+    # Conditionally include MarketAux section
+    marketaux_section = ""
+    if marketaux_text:
+        marketaux_section = f"""
+
+── MARKETAUX API SENTIMENT (entity-scored) ────
+{marketaux_text}
+"""
+
     return f"""
 NSE BREAKOUT SIGNAL – SENTIMENT ANALYSIS REQUEST
 =================================================
@@ -307,8 +318,7 @@ Signal Type : {sig.get('signal_type', 'BREAKOUT')}
 
 ── RAW RECENT NEWS ────────────────────────────
 {news_headlines or 'No recent headlines found for this symbol.'}
-
-── ANALYSIS CONTEXT ───────────────────────────
+{marketaux_section}── ANALYSIS CONTEXT ───────────────────────────
 NSE India EQ stock. Consider: sector rotation, FII/DII flow impact,
 RBI policy relevance, SEBI regulatory environment, promoter activity.
 Breakout date: {sig.get('scan_date', 'today')}
@@ -564,25 +574,29 @@ def _run_debate(sig: dict, verdicts: Dict[str, AgentVerdict],
                 client) -> DebateResult:
     """
     3-turn sequential debate: Bull → Bear → Fund Manager (moderator).
-    Sequential (not parallel) so each turn can reference prior.
+    Sequential (not parallel) so each turn can reference prior arguments.
+
+    Models:
+      Bull + Bear (Turns 1-2): LLM_PANEL_RISK_MODEL  (llama-4-scout — fast, logic-focused)
+      Moderator   (Turn 3):   LLM_PANEL_MODERATOR_MODEL (llama-4-maverick — final decision)
     """
     result = DebateResult(triggered=True)
     context = _build_debate_context(sig, verdicts)
 
-    # Turn 1: Bull Researcher
+    # Turn 1: Bull Researcher (Scout — argues FOR)
     try:
         bull_prompt = (
             f"{context}\n\n"
             f"BULL RESEARCHER – make your strongest case FOR this trade based on the evidence above."
         )
         result.bull_stance = _call_llm(
-            LLM_PANEL_TECH_MODEL, _BULL_DEBATE_SYSTEM, bull_prompt,
+            LLM_PANEL_RISK_MODEL, _BULL_DEBATE_SYSTEM, bull_prompt,
             client, max_tokens=250
         )
     except Exception as e:
         result.bull_stance = f"Bull argument unavailable: {e}"
 
-    # Turn 2: Bear Researcher
+    # Turn 2: Bear Researcher (Scout — argues AGAINST)
     try:
         bear_prompt = (
             f"{context}\n\n"
@@ -590,13 +604,13 @@ def _run_debate(sig: dict, verdicts: Dict[str, AgentVerdict],
             f"BEAR RESEARCHER – make your strongest case AGAINST this trade."
         )
         result.bear_stance = _call_llm(
-            LLM_PANEL_SENT_MODEL, _BEAR_DEBATE_SYSTEM, bear_prompt,
+            LLM_PANEL_RISK_MODEL, _BEAR_DEBATE_SYSTEM, bear_prompt,
             client, max_tokens=250
         )
     except Exception as e:
         result.bear_stance = f"Bear argument unavailable: {e}"
 
-    # Turn 3: Fund Manager moderates
+    # Turn 3: Fund Manager moderates (Maverick — reads all inputs, final CONFIRM/REJECT)
     try:
         mod_prompt = (
             f"{context}\n\n"
@@ -605,7 +619,7 @@ def _run_debate(sig: dict, verdicts: Dict[str, AgentVerdict],
             f"FUND MANAGER – review both arguments and give your final trading decision."
         )
         raw_mod = _call_llm(
-            LLM_PANEL_RISK_MODEL, _MODERATOR_SYSTEM, mod_prompt,
+            LLM_PANEL_MODERATOR_MODEL, _MODERATOR_SYSTEM, mod_prompt,
             client, max_tokens=350
         )
         # Parse moderator JSON
@@ -738,6 +752,22 @@ def run_panel(sig: dict, scan_date: str) -> Optional[PanelVerdict]:
     except Exception as e:
         logger.warning(f"[Panel] Sentiment pre-score failed for {sig.get('symbol')}: {e}")
 
+    # ── MarketAux sentiment enrichment (optional, pluggable) ─────────────
+    marketaux_text = ""
+    try:
+        from config import MARKETAUX_ENABLED
+        if MARKETAUX_ENABLED:
+            from analysis.marketaux_client import get_marketaux_sentiment, format_marketaux_for_prompt
+            ma_report = get_marketaux_sentiment(sig.get("symbol", ""), scan_date)
+            if ma_report:
+                marketaux_text = format_marketaux_for_prompt(ma_report)
+                if marketaux_text:
+                    logger.info(f"[Panel] MarketAux enrichment for {sig.get('symbol')}: "
+                                f"{ma_report.get('article_count', 0)} article(s), "
+                                f"avg={ma_report.get('avg_sentiment', 0):.2f}")
+    except Exception as e:
+        logger.warning(f"[Panel] MarketAux enrichment failed for {sig.get('symbol')}: {e}")
+
     # Pull current open position count for risk prompt
     try:
         from data.database import get_open_positions
@@ -747,7 +777,7 @@ def run_panel(sig: dict, scan_date: str) -> Optional[PanelVerdict]:
 
     # ── Build prompts ──────────────────────────────────────────────────────────
     tech_prompt = _build_tech_prompt(sig)
-    sent_prompt = _build_sent_prompt(sig, sentiment_text, news_headlines)
+    sent_prompt = _build_sent_prompt(sig, sentiment_text, news_headlines, marketaux_text)
     risk_prompt = _build_risk_prompt(sig, open_count)
 
     # ── Run 3 agents IN PARALLEL ───────────────────────────────────────────────
@@ -834,6 +864,60 @@ def run_panel(sig: dict, scan_date: str) -> Optional[PanelVerdict]:
     )
 
 
+# ── Enrichment cache staleness detection ──────────────────────────────────────
+
+def _detect_new_enrichment_sources(scan_date: str, verdict_cache: dict) -> dict:
+    """
+    Check if new enrichment sources (MarketAux) are enabled but were
+    NOT used when the cached panel verdicts were created.
+
+    Returns a dict of {symbol: "reason"} for symbols whose cache should be
+    invalidated so the panel re-runs with the new enrichment data.
+    """
+    stale: Dict[str, str] = {}
+    if not verdict_cache:
+        return stale
+
+    try:
+        from config import MARKETAUX_ENABLED
+    except ImportError:
+        return stale
+
+    # Nothing new enabled — all cache entries are valid
+    if not MARKETAUX_ENABLED:
+        return stale
+
+    import sqlite3
+    from config import DB_PATH
+
+    conn = sqlite3.connect(DB_PATH)
+    cached_symbols = set(verdict_cache.keys())
+
+    # Check MarketAux: if enabled, which cached symbols have no MarketAux data?
+    ma_covered = set()
+    if MARKETAUX_ENABLED:
+        try:
+            rows = conn.execute(
+                "SELECT symbol FROM marketaux_cache WHERE scan_date = ?",
+                (scan_date,)
+            ).fetchall()
+            ma_covered = {r[0] for r in rows}
+        except Exception:
+            pass  # table may not exist yet
+
+    conn.close()
+
+    # Mark symbols whose panel cache is stale
+    for symbol in cached_symbols:
+        reasons = []
+        if MARKETAUX_ENABLED and symbol not in ma_covered:
+            reasons.append("MarketAux")
+        if reasons:
+            stale[symbol] = "+".join(reasons)
+
+    return stale
+
+
 # ── Public API (drop-in replacement for validate_signals_batch) ───────────────
 
 def validate_signals_panel(signals: list, scan_date: str) -> list:
@@ -866,19 +950,30 @@ def validate_signals_panel(signals: list, scan_date: str) -> list:
     api_count    = 0
     cached_count = 0
 
+    # ── Detect newly-enabled enrichment sources ──────────────────────────
+    # If MarketAux was just enabled but the panel cache was created
+    # without its data, we must invalidate the cache and re-run the panel
+    # so the SENTIMENT agent gets the new data.
+    _new_enrichment_sources = _detect_new_enrichment_sources(scan_date, verdict_cache)
+
     for i, sig in enumerate(signals, 1):
         sig["scan_date"] = scan_date
         symbol = sig.get("symbol", "?")
 
-        # Cache hit
+        # Cache hit — but invalidate if new enrichment sources are enabled
         if symbol in verdict_cache:
-            sig.update(verdict_cache[symbol])
-            cached_count += 1
-            verdict = sig.get("llm_verdict", "?")
-            method  = sig.get("panel_method", "?")
-            print(f"  [Panel {i:>3}/{total}] {symbol:<15} → {verdict} "
-                  f"({method}, cached)", flush=True)
-            continue
+            if symbol in _new_enrichment_sources:
+                # New enrichment source enabled → re-run panel with fresh data
+                logger.info(f"[Panel] Cache invalidated for {symbol} — "
+                            f"new enrichment: {_new_enrichment_sources[symbol]}")
+            else:
+                sig.update(verdict_cache[symbol])
+                cached_count += 1
+                verdict = sig.get("llm_verdict", "?")
+                method  = sig.get("panel_method", "?")
+                print(f"  [Panel {i:>3}/{total}] {symbol:<15} → {verdict} "
+                      f"({method}, cached)", flush=True)
+                continue
 
         # Cache miss — run panel
         print(f"  [Panel {i:>3}/{total}] {symbol:<15} ", end="", flush=True)

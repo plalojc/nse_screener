@@ -88,6 +88,26 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS marketaux_cache (
+            symbol        TEXT    NOT NULL,
+            scan_date     TEXT    NOT NULL,
+            response_json TEXT,
+            fetched_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, scan_date)
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS gemini_sentiment_cache (
+            symbol        TEXT    NOT NULL,
+            scan_date     TEXT    NOT NULL,
+            response_json TEXT,
+            fetched_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(symbol, scan_date)
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS breakout_log (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_date       TEXT    NOT NULL,
@@ -138,10 +158,14 @@ def init_db():
         ("vcp_detected",       "INTEGER"),
         ("bull_flag_detected", "INTEGER"),
         ("pattern_score",      "INTEGER"),
-        # Live validation (Gemini + Google Search)
+        # Live validation (Claude + Web Search)
         ("live_verdict",       "TEXT"),
         ("live_confidence",    "INTEGER"),
         ("live_reasoning",     "TEXT"),
+        # Gemini sentiment validation (Gemini 2.5 Flash + Google Search)
+        ("gemini_verdict",     "TEXT"),
+        ("gemini_confidence",  "INTEGER"),
+        ("gemini_reasoning",   "TEXT"),
     ]:
         try:
             cur.execute(f"ALTER TABLE breakout_log ADD COLUMN {col} {typedef}")
@@ -385,8 +409,9 @@ def save_breakout_log(scan_date: str, sig: dict):
              debate_triggered, debate_winner, debate_reasoning,
              panel_method, weighted_score,
              vcp_detected, bull_flag_detected, pattern_score,
-             live_verdict, live_confidence, live_reasoning)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             live_verdict, live_confidence, live_reasoning,
+             gemini_verdict, gemini_confidence, gemini_reasoning)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(scan_date, symbol) DO UPDATE SET
             signal_type      = excluded.signal_type,
             close            = excluded.close,
@@ -436,7 +461,11 @@ def save_breakout_log(scan_date: str, sig: dict):
             -- Live validation: update whenever a real verdict arrives
             live_verdict     = COALESCE(excluded.live_verdict,     live_verdict),
             live_confidence  = COALESCE(excluded.live_confidence,  live_confidence),
-            live_reasoning   = COALESCE(excluded.live_reasoning,   live_reasoning)
+            live_reasoning   = COALESCE(excluded.live_reasoning,   live_reasoning),
+            -- Gemini sentiment validation: update whenever a real verdict arrives
+            gemini_verdict   = COALESCE(excluded.gemini_verdict,   gemini_verdict),
+            gemini_confidence = COALESCE(excluded.gemini_confidence, gemini_confidence),
+            gemini_reasoning = COALESCE(excluded.gemini_reasoning, gemini_reasoning)
     """, (
         scan_date,
         sig.get("symbol"),
@@ -476,6 +505,10 @@ def save_breakout_log(scan_date: str, sig: dict):
         sig.get("live_verdict"),
         sig.get("live_confidence"),
         sig.get("live_reasoning"),
+        # Gemini sentiment validation fields
+        sig.get("gemini_verdict"),
+        sig.get("gemini_confidence"),
+        sig.get("gemini_reasoning"),
     ))
     conn.commit()
     conn.close()
@@ -497,7 +530,8 @@ def get_panel_verdict_cache(scan_date: str) -> dict:
                debate_triggered, debate_winner, debate_reasoning,
                panel_method, weighted_score,
                vcp_detected, bull_flag_detected, pattern_score,
-               live_verdict, live_confidence, live_reasoning
+               live_verdict, live_confidence, live_reasoning,
+               gemini_verdict, gemini_confidence, gemini_reasoning
         FROM   breakout_log
         WHERE  scan_date = ?
           AND  llm_verdict NOT IN ('SKIPPED', '')
@@ -531,6 +565,9 @@ def get_panel_verdict_cache(scan_date: str) -> dict:
             "live_verdict":     r["live_verdict"],
             "live_confidence":  r["live_confidence"],
             "live_reasoning":   r["live_reasoning"],
+            "gemini_verdict":   r["gemini_verdict"],
+            "gemini_confidence": r["gemini_confidence"],
+            "gemini_reasoning": r["gemini_reasoning"],
         }
         for r in rows
     }

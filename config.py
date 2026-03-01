@@ -52,26 +52,23 @@ NEWS_RSS_FEEDS = [
 # ── Scheduler ─────────────────────────────────────────────
 SCAN_TIME_IST = "08:20"   # run scan 20 min after NSE opens
 # ── LLM Validation ─────────────────────────────────────────
-# Provider options: "groq" | "openai" | "openrouter" | "gemini"
+# Provider options: "groq" | "openai" | "openrouter" | "gemini" | "ollama"
 #
-# RECOMMENDED → Groq (FREE, fastest): https://console.groq.com/keys
-LLM_PROVIDER  = "groq"
-LLM_MODEL     = "llama-3.3-70b-versatile"
-LLM_BASE_URL  = "https://api.groq.com/openai/v1"
+# RECOMMENDED → Groq (paid subscription): https://console.groq.com/keys
+#   LLM_PROVIDER = "groq"   (default)
 #
-# ALTERNATIVE  → Ollama (local, no API key, no rate limits):
-#   LLM_PROVIDER  = "ollama"
-#   LLM_MODEL     = "llama3.1:8b"          # or llama3.1:70b if you have the VRAM
-#   (set in .env — no other changes needed)
+# ALTERNATIVE → Ollama (local, no API key, no rate limits):
+#   LLM_PROVIDER = "ollama"
+#   LLM_MODEL    = "llama3.1:8b"
 #
-# ALTERNATIVE  → Gemini 2.0 Flash (FREE tier): https://aistudio.google.com/apikey
-#   LLM_PROVIDER  = "gemini"
-#   LLM_MODEL     = "gemini-2.0-flash"
+# ALTERNATIVE → Gemini 2.0 Flash (FREE tier): https://aistudio.google.com/apikey
+#   LLM_PROVIDER = "gemini"
+#   LLM_MODEL    = "gemini-2.0-flash"
 #
-# ALTERNATIVE  → OpenAI GPT-4o-mini (paid, reliable): https://platform.openai.com
-#   LLM_PROVIDER  = "openai"
-#   LLM_MODEL     = "gpt-4o-mini"
-#   LLM_BASE_URL  = ""   # leave blank for default OpenAI endpoint
+# ALTERNATIVE → OpenAI GPT-4o-mini (paid): https://platform.openai.com
+#   LLM_PROVIDER = "openai"
+#   LLM_MODEL    = "gpt-4o-mini"
+#   LLM_BASE_URL = ""   # leave blank for default OpenAI endpoint
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 
@@ -85,24 +82,27 @@ if LLM_PROVIDER == "ollama":
     LLM_PANEL_TECH_MODEL = os.getenv("LLM_PANEL_TECH_MODEL", "llama3.1:8b")
     LLM_PANEL_SENT_MODEL = os.getenv("LLM_PANEL_SENT_MODEL", "llama3.1:8b")
     LLM_PANEL_RISK_MODEL = os.getenv("LLM_PANEL_RISK_MODEL", "llama3.1:8b")
+    LLM_PANEL_MODERATOR_MODEL = os.getenv("LLM_PANEL_MODERATOR_MODEL", "llama3.1:8b")
 else:
-    # Groq / OpenAI / OpenRouter / Gemini (cloud)
+    # Groq (paid subscription) — OpenAI-compatible endpoint
     LLM_API_KEY          = os.getenv("LLM_API_KEY",          "")
     LLM_BASE_URL         = os.getenv("LLM_BASE_URL",         "https://api.groq.com/openai/v1")
-    LLM_MODEL            = os.getenv("LLM_MODEL",            "llama-3.3-70b-versatile")
-    LLM_PANEL_TECH_MODEL = os.getenv("LLM_PANEL_TECH_MODEL", "llama-3.3-70b-versatile")
+    LLM_MODEL            = os.getenv("LLM_MODEL",            "meta-llama/llama-4-scout-17b-16e-instruct")
+    # ── Panel agent models ──────────────────────────────────────────
+    # TECH + RISK + Bull/Bear debate: Scout (fast, math/logic focused)
+    # SENTIMENT: llama-3.1-8b-instant (fast NLP for news categorization)
+    # MODERATOR (debate Turn 3): Maverick (reads all inputs, makes final call)
+    LLM_PANEL_TECH_MODEL = os.getenv("LLM_PANEL_TECH_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     LLM_PANEL_SENT_MODEL = os.getenv("LLM_PANEL_SENT_MODEL", "llama-3.1-8b-instant")
-    # 3 different models → 3 separate Groq rate-limit buckets (avoids throttling).
-    # Groq free-tier (2026): llama-3.3-70b=12K TPM, llama-3.1-8b=6K TPM, llama-4-scout=30K TPM.
-    # NOTE: deepseek-r1-distill-llama-70b is NOT on free tier — do not use it.
     LLM_PANEL_RISK_MODEL = os.getenv("LLM_PANEL_RISK_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    LLM_PANEL_MODERATOR_MODEL = os.getenv("LLM_PANEL_MODERATOR_MODEL", "meta-llama/llama-4-maverick-17b-128e-instruct")
 
 LLM_MAX_TOKENS   = 256    # verdict + confidence + one-line reasoning
 LLM_TEMPERATURE  = 0.2    # low temperature for deterministic analysis
 
 # ── Multi-LLM Panel (3-agent ensemble with debate) ─────────────
 # Set USE_MULTI_LLM_PANEL=true to enable; falls back to single LLM if panel fails.
-# All 3 agents use the same LLM_API_KEY / LLM_BASE_URL.
+# All agents use the same LLM_API_KEY / LLM_BASE_URL.
 USE_MULTI_LLM_PANEL  = os.getenv("USE_MULTI_LLM_PANEL", "true").lower() == "true"
 LLM_PANEL_MAX_TOKENS = int(os.getenv("LLM_PANEL_MAX_TOKENS", "512"))
 
@@ -112,14 +112,15 @@ LLM_PANEL_MAX_TOKENS = int(os.getenv("LLM_PANEL_MAX_TOKENS", "512"))
 PANEL_SEQUENTIAL_MODE = os.getenv("PANEL_SEQUENTIAL_MODE", "false").lower() == "true"
 PANEL_AGENT_DELAY     = float(os.getenv("PANEL_AGENT_DELAY", "1.0"))
 
-# ── Live Validation (Gemini + Google Search Grounding) ──────────
-# Optional 2nd-pass validation using Gemini with real-time Google Search.
+# ── Live Validation (Claude + Web Search) ───────────────────────
+# Optional 2nd-pass validation using Claude Opus 4.6 with server-side web search.
+# Claude automatically searches the web for real-time news and cites sources.
 # Only called for CONFIRM/WEAK signals (not REJECTs) to save quota.
-# FREE: 500 grounded searches/day on Gemini Flash (more than enough).
-# Get API key at: https://aistudio.google.com/apikey
+# Pricing: $10 per 1,000 web searches + standard token costs.
+# Get API key at: https://console.anthropic.com/settings/keys
 USE_LIVE_VALIDATION = os.getenv("USE_LIVE_VALIDATION", "false").lower() == "true"
-LIVE_API_KEY        = os.getenv("LIVE_API_KEY", "")     # Gemini API key
-LIVE_MODEL          = os.getenv("LIVE_MODEL", "gemini-2.0-flash")
+LIVE_API_KEY        = os.getenv("LIVE_API_KEY", "")     # Anthropic API key
+LIVE_MODEL          = os.getenv("LIVE_MODEL", "claude-opus-4-6")
 
 # Configurable prompt — user controls exactly what to ask Gemini.
 # Placeholders: {symbol}, {close}, {signal_type}, {stage}, {score},
@@ -132,7 +133,7 @@ Signal: {signal_type} | Stage: {stage} | Score: {score}/20
 RSI: {rsi} | Volume: {vol_ratio}x average
 Our panel verdict: {panel_verdict} — "{panel_reasoning}"
 
-IMPORTANT — Search Google for current information about {symbol} NSE India:
+IMPORTANT — Search the web for current information about {symbol} NSE India:
 1. Recent news (last 24-48 hours): earnings, results, orders, SEBI notices
 2. Analyst upgrades/downgrades or institutional activity (FII/DII)
 3. Promoter activity: pledging, buying, selling
@@ -154,3 +155,28 @@ Rules:
 - If you find NO relevant recent news: verdict WEAK with confidence 5
 - Always cite the specific news source and date in your reasoning
 """.strip())
+
+# ── MarketAux News/Sentiment API (optional, pluggable) ────────────
+# Additional news source with API-scored entity sentiment for NSE stocks.
+# Enriches the SENTIMENT agent's prompt alongside existing RSS feeds.
+# Free tier: 100 requests/day, 3 articles/request.
+# Get API key at: https://www.marketaux.com/account/dashboard
+MARKETAUX_ENABLED      = os.getenv("USE_MARKETAUX", "false").lower() == "true"
+MARKETAUX_API_KEY      = os.getenv("MARKETAUX_API_KEY", "")
+MARKETAUX_MAX_ARTICLES = int(os.getenv("MARKETAUX_MAX_ARTICLES", "3"))
+MARKETAUX_RATE_DELAY   = float(os.getenv("MARKETAUX_RATE_DELAY", "0.5"))
+
+# ── Gemini Sentiment Validation (optional, pluggable) ──────────────
+# Post-panel validation using Gemini 2.5 Flash + Google Search grounding.
+# Runs AFTER the multi-LLM panel on CONFIRM/WEAK signals only.
+# Searches the web for recent news and gives its own verdict, which
+# can override/modify the panel verdict via an override table.
+# Free tier: 500 grounded searches/day, 10 RPM (= 1 call every 6s).
+# Tier 1: 1500 grounded/day, 150 RPM.
+# Get API key at: https://aistudio.google.com/apikey
+# NOTE: After billing setup, check https://aistudio.google.com/apikey
+#       for "Action needed" — a one-time prepayment may be required.
+GEMINI_SENTIMENT_ENABLED    = os.getenv("USE_GEMINI_SENTIMENT", "false").lower() == "true"
+GEMINI_SENTIMENT_API_KEY    = os.getenv("GEMINI_SENTIMENT_API_KEY", "")
+GEMINI_SENTIMENT_MODEL      = os.getenv("GEMINI_SENTIMENT_MODEL", "gemini-2.5-flash")
+GEMINI_SENTIMENT_RATE_DELAY = float(os.getenv("GEMINI_SENTIMENT_RATE_DELAY", "1.0"))

@@ -10,7 +10,16 @@
       "Bash(venv/Scripts/python:*)",
       "WebFetch(domain:ai.google.dev)",
       "Bash(venv/Scripts/pip install google-genai)",
-      "WebFetch(domain:console.groq.com)"
+      "WebFetch(domain:console.groq.com)",
+      "Bash(del \"C:\\\\Users\\\\plalb\\\\.claude\\\\plans\\\\transient-knitting-charm.md\")",
+      "Skill(claude-developer-platform)",
+      "Skill(claude-developer-platform:*)",
+      "Bash(venv\\\\Scripts\\\\pip install:*)",
+      "Bash(./venv/Scripts/pip install:*)",
+      "WebFetch(domain:marketaux.com)",
+      "WebFetch(domain:www.marketaux.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:reddit.com)"
     ]
   }
 }
