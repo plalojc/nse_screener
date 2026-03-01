@@ -99,17 +99,49 @@ def init_db():
             UNIQUE(scan_date, symbol)       -- one entry per symbol per day
         )
     """)
-    # Migrations for existing DBs
+    # Migrations for existing DBs (original + multi-LLM panel columns)
     for col, typedef in [
-        ("swing_low",      "REAL"),
-        ("llm_verdict",    "TEXT"),
-        ("llm_confidence", "INTEGER"),
-        ("llm_reasoning",  "TEXT"),
+        # Original migrations
+        ("swing_low",          "REAL"),
+        ("llm_verdict",        "TEXT"),
+        ("llm_confidence",     "INTEGER"),
+        ("llm_reasoning",      "TEXT"),
+        # Multi-LLM panel: per-agent verdicts
+        ("tech_verdict",       "TEXT"),
+        ("tech_confidence",    "INTEGER"),
+        ("tech_reasoning",     "TEXT"),
+        ("sent_verdict",       "TEXT"),
+        ("sent_confidence",    "INTEGER"),
+        ("sent_reasoning",     "TEXT"),
+        ("risk_verdict",       "TEXT"),
+        ("risk_confidence",    "INTEGER"),
+        ("risk_reasoning",     "TEXT"),
+        # Debate fields
+        ("debate_triggered",   "INTEGER"),
+        ("debate_winner",      "TEXT"),
+        ("debate_reasoning",   "TEXT"),
+        # Meta
+        ("panel_method",       "TEXT"),
+        ("weighted_score",     "REAL"),
+        # Advanced pattern detection
+        ("vcp_detected",       "INTEGER"),
+        ("bull_flag_detected", "INTEGER"),
+        ("pattern_score",      "INTEGER"),
+        # Live validation (Gemini + Google Search)
+        ("live_verdict",       "TEXT"),
+        ("live_confidence",    "INTEGER"),
+        ("live_reasoning",     "TEXT"),
     ]:
         try:
             cur.execute(f"ALTER TABLE breakout_log ADD COLUMN {col} {typedef}")
         except sqlite3.OperationalError:
-            pass
+            pass   # column already exists
+
+    # Migrate news_cache: add body column for richer sentiment analysis
+    try:
+        cur.execute("ALTER TABLE news_cache ADD COLUMN body TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     conn.commit()
     conn.close()
@@ -274,28 +306,35 @@ def save_breakout_log(scan_date: str, sig: dict):
     Insert or replace a breakout signal row in breakout_log.
     IMPORTANT: Never overwrites an existing real LLM verdict with SKIPPED —
     preserves validated verdicts across re-runs on the same day.
+    Now also stores multi-LLM panel fields (per-agent verdicts, debate, patterns).
     """
     conn = get_conn()
     conn.execute("""
         INSERT INTO breakout_log
             (scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
              stage, ema20, ema50, atr14, swing_low, reasons,
-             llm_verdict, llm_confidence, llm_reasoning)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             llm_verdict, llm_confidence, llm_reasoning,
+             tech_verdict, tech_confidence, tech_reasoning,
+             sent_verdict, sent_confidence, sent_reasoning,
+             risk_verdict, risk_confidence, risk_reasoning,
+             debate_triggered, debate_winner, debate_reasoning,
+             panel_method, weighted_score,
+             vcp_detected, bull_flag_detected, pattern_score,
+             live_verdict, live_confidence, live_reasoning)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(scan_date, symbol) DO UPDATE SET
-            signal_type    = excluded.signal_type,
-            close          = excluded.close,
-            rsi            = excluded.rsi,
-            vol_ratio      = excluded.vol_ratio,
-            score          = excluded.score,
-            stage          = excluded.stage,
-            ema20          = excluded.ema20,
-            ema50          = excluded.ema50,
-            atr14          = excluded.atr14,
-            swing_low      = excluded.swing_low,
-            reasons        = excluded.reasons,
+            signal_type      = excluded.signal_type,
+            close            = excluded.close,
+            rsi              = excluded.rsi,
+            vol_ratio        = excluded.vol_ratio,
+            score            = excluded.score,
+            stage            = excluded.stage,
+            ema20            = excluded.ema20,
+            ema50            = excluded.ema50,
+            atr14            = excluded.atr14,
+            swing_low        = excluded.swing_low,
+            reasons          = excluded.reasons,
             -- Only update LLM fields if the new value is a real verdict
-            -- or if there is no existing real verdict stored yet
             llm_verdict    = CASE
                 WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_verdict
                 WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_verdict
@@ -310,7 +349,29 @@ def save_breakout_log(scan_date: str, sig: dict):
                 WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_reasoning
                 WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_reasoning
                 ELSE llm_reasoning
-            END
+            END,
+            -- Panel agent fields: update whenever a real verdict arrives
+            tech_verdict     = COALESCE(excluded.tech_verdict,     tech_verdict),
+            tech_confidence  = COALESCE(excluded.tech_confidence,  tech_confidence),
+            tech_reasoning   = COALESCE(excluded.tech_reasoning,   tech_reasoning),
+            sent_verdict     = COALESCE(excluded.sent_verdict,     sent_verdict),
+            sent_confidence  = COALESCE(excluded.sent_confidence,  sent_confidence),
+            sent_reasoning   = COALESCE(excluded.sent_reasoning,   sent_reasoning),
+            risk_verdict     = COALESCE(excluded.risk_verdict,     risk_verdict),
+            risk_confidence  = COALESCE(excluded.risk_confidence,  risk_confidence),
+            risk_reasoning   = COALESCE(excluded.risk_reasoning,   risk_reasoning),
+            debate_triggered = COALESCE(excluded.debate_triggered, debate_triggered),
+            debate_winner    = COALESCE(excluded.debate_winner,    debate_winner),
+            debate_reasoning = COALESCE(excluded.debate_reasoning, debate_reasoning),
+            panel_method     = COALESCE(excluded.panel_method,     panel_method),
+            weighted_score   = COALESCE(excluded.weighted_score,   weighted_score),
+            vcp_detected     = COALESCE(excluded.vcp_detected,     vcp_detected),
+            bull_flag_detected = COALESCE(excluded.bull_flag_detected, bull_flag_detected),
+            pattern_score    = COALESCE(excluded.pattern_score,    pattern_score),
+            -- Live validation: update whenever a real verdict arrives
+            live_verdict     = COALESCE(excluded.live_verdict,     live_verdict),
+            live_confidence  = COALESCE(excluded.live_confidence,  live_confidence),
+            live_reasoning   = COALESCE(excluded.live_reasoning,   live_reasoning)
     """, (
         scan_date,
         sig.get("symbol"),
@@ -328,9 +389,86 @@ def save_breakout_log(scan_date: str, sig: dict):
         sig.get("llm_verdict", "SKIPPED"),
         sig.get("llm_confidence"),
         sig.get("llm_reasoning"),
+        # Panel agent fields
+        sig.get("tech_verdict"),
+        sig.get("tech_confidence"),
+        sig.get("tech_reasoning"),
+        sig.get("sent_verdict"),
+        sig.get("sent_confidence"),
+        sig.get("sent_reasoning"),
+        sig.get("risk_verdict"),
+        sig.get("risk_confidence"),
+        sig.get("risk_reasoning"),
+        sig.get("debate_triggered"),
+        sig.get("debate_winner"),
+        sig.get("debate_reasoning"),
+        sig.get("panel_method"),
+        sig.get("weighted_score"),
+        sig.get("vcp_detected"),
+        sig.get("bull_flag_detected"),
+        sig.get("pattern_score"),
+        # Live validation fields
+        sig.get("live_verdict"),
+        sig.get("live_confidence"),
+        sig.get("live_reasoning"),
     ))
     conn.commit()
     conn.close()
+
+
+def get_panel_verdict_cache(scan_date: str) -> dict:
+    """
+    Return already-validated multi-LLM panel verdicts for today.
+    Includes all per-agent fields so the caller can restore the full PanelVerdict.
+    Only returns rows with a real verdict (not SKIPPED/NULL) from MULTI_LLM or SINGLE_LLM runs.
+    """
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT symbol, llm_verdict, llm_confidence, llm_reasoning,
+               tech_verdict, tech_confidence, tech_reasoning,
+               sent_verdict, sent_confidence, sent_reasoning,
+               risk_verdict, risk_confidence, risk_reasoning,
+               debate_triggered, debate_winner, debate_reasoning,
+               panel_method, weighted_score,
+               vcp_detected, bull_flag_detected, pattern_score,
+               live_verdict, live_confidence, live_reasoning
+        FROM   breakout_log
+        WHERE  scan_date = ?
+          AND  llm_verdict NOT IN ('SKIPPED', '')
+          AND  llm_verdict IS NOT NULL
+        """,
+        (scan_date,)
+    ).fetchall()
+    conn.close()
+    return {
+        r["symbol"]: {
+            "llm_verdict":      r["llm_verdict"],
+            "llm_confidence":   r["llm_confidence"],
+            "llm_reasoning":    r["llm_reasoning"],
+            "tech_verdict":     r["tech_verdict"],
+            "tech_confidence":  r["tech_confidence"],
+            "tech_reasoning":   r["tech_reasoning"],
+            "sent_verdict":     r["sent_verdict"],
+            "sent_confidence":  r["sent_confidence"],
+            "sent_reasoning":   r["sent_reasoning"],
+            "risk_verdict":     r["risk_verdict"],
+            "risk_confidence":  r["risk_confidence"],
+            "risk_reasoning":   r["risk_reasoning"],
+            "debate_triggered": r["debate_triggered"],
+            "debate_winner":    r["debate_winner"],
+            "debate_reasoning": r["debate_reasoning"],
+            "panel_method":     r["panel_method"],
+            "weighted_score":   r["weighted_score"],
+            "vcp_detected":     r["vcp_detected"],
+            "bull_flag_detected": r["bull_flag_detected"],
+            "pattern_score":    r["pattern_score"],
+            "live_verdict":     r["live_verdict"],
+            "live_confidence":  r["live_confidence"],
+            "live_reasoning":   r["live_reasoning"],
+        }
+        for r in rows
+    }
 
 
 def get_breakout_log(days: int = 30) -> pd.DataFrame:

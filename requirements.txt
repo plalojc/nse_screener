@@ -8,3 +8,4 @@ colorama
 python-dotenv
 openai                  # LLM validation (works with Groq / OpenAI / OpenRouter)
 # google-generativeai   # uncomment if using LLM_PROVIDER=gemini
+google-genai            # Live validation: Gemini + Google Search grounding

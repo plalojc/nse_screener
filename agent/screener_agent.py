@@ -19,7 +19,10 @@ from agent.portfolio_tracker   import check_exit_signals
 from config import (MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, LLM_API_KEY, LLM_PROVIDER, LLM_MODEL,
                     TOP_PICKS_COUNT, TOP_PICKS_MIN_SCORE,
-                    TOP_PICKS_MIN_VOL, TOP_PICKS_RSI_MAX, REPORT_DIR)
+                    TOP_PICKS_MIN_VOL, TOP_PICKS_RSI_MAX, REPORT_DIR,
+                    USE_MULTI_LLM_PANEL, LLM_PANEL_TECH_MODEL,
+                    LLM_PANEL_SENT_MODEL, LLM_PANEL_RISK_MODEL,
+                    USE_LIVE_VALIDATION, LIVE_API_KEY, LIVE_MODEL)
 from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
@@ -156,12 +159,20 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     signals.sort(key=lambda x: x["score"], reverse=True)
 
-    # ── Step 4 – LLM Validation ────────────────────────────────────────────
+    # ── Step 4 – LLM Validation (Multi-Panel or Single-LLM fallback) ──────
     if signals:
         if LLM_API_KEY:
-            print(Fore.YELLOW + f"\n[4/5] LLM validation ({len(signals)} signal(s))...")
-            print(Fore.CYAN   + f"      Provider : {LLM_PROVIDER}  Model : {LLM_MODEL}")
-            validate_signals_batch(signals, scan_date=target_date)
+            if USE_MULTI_LLM_PANEL:
+                print(Fore.YELLOW + f"\n[4/5] Multi-LLM Panel ({len(signals)} signal(s))...")
+                print(Fore.CYAN   + f"      TECHNICAL : {LLM_PANEL_TECH_MODEL}")
+                print(Fore.CYAN   + f"      SENTIMENT : {LLM_PANEL_SENT_MODEL}")
+                print(Fore.CYAN   + f"      RISK      : {LLM_PANEL_RISK_MODEL}")
+                from analysis.llm_panel import validate_signals_panel
+                validate_signals_panel(signals, scan_date=target_date)
+            else:
+                print(Fore.YELLOW + f"\n[4/5] LLM validation ({len(signals)} signal(s))...")
+                print(Fore.CYAN   + f"      Provider : {LLM_PROVIDER}  Model : {LLM_MODEL}")
+                validate_signals_batch(signals, scan_date=target_date)
         else:
             print(Fore.RED + "\n[4/5] LLM validation SKIPPED.")
             print(Fore.RED + "      Reason: LLM_API_KEY is not set.")
@@ -177,6 +188,24 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         for sig in signals:
             save_breakout_log(target_date, sig)
         print(f"  {len(signals)} signal(s) saved to breakout_log.")
+
+        # ── Step 4b – Live Validation via Gemini + Google Search (optional) ──
+        if USE_LIVE_VALIDATION and LIVE_API_KEY:
+            confirmable = [s for s in signals
+                           if s.get("llm_verdict") in ("CONFIRM", "WEAK")]
+            if confirmable:
+                print(Fore.YELLOW + f"\n[4b/5] Live validation ({len(confirmable)} signal(s))...")
+                print(Fore.CYAN   + f"       Gemini + Google Search Grounding")
+                print(Fore.CYAN   + f"       Model  : {LIVE_MODEL}")
+                from analysis.live_validator import validate_signals_live
+                validate_signals_live(confirmable, scan_date=target_date)
+            else:
+                print(Fore.YELLOW + "\n[4b/5] Live validation skipped – no CONFIRM/WEAK signals.")
+        elif USE_LIVE_VALIDATION and not LIVE_API_KEY:
+            print(Fore.RED + "\n[4b/5] Live validation SKIPPED.")
+            print(Fore.RED + "       Reason: LIVE_API_KEY is not set.")
+            print(Fore.RED + "       Fix   : Add LIVE_API_KEY=your_key to .env")
+            print(Fore.RED + "               (get free key at https://aistudio.google.com/apikey)")
     else:
         for sig in signals:
             sig["scan_date"] = target_date
@@ -352,15 +381,45 @@ def _print_top_picks(signals: list, scan_date: str):
         reasoning = s.get("llm_reasoning") or ""
 
         verdict_colour = Fore.GREEN if s.get("llm_verdict") == "CONFIRM" else Fore.YELLOW
+        # Show pattern badges if detected
+        pattern_badges = ""
+        if s.get("vcp_detected"):
+            pattern_badges += " [VCP]"
+        if s.get("bull_flag_detected"):
+            pattern_badges += " [FLAG]"
+
+        # Live verdict badge
+        live_v = s.get("live_verdict")
+        live_str = ""
+        if live_v and live_v not in ("SKIPPED", ""):
+            live_conf = s.get("live_confidence") or "?"
+            live_str = f"  LIVE:{live_v}({live_conf}/10)"
+
         print(verdict_colour +
               f"  #{rank}  {s['symbol']:<12}  ₹{bp:<9.2f}  "
               f"Score:{s['score']}  RSI:{s['rsi']:.0f}  Vol:{s['vol_ratio']:.1f}x  "
-              f"LLM:{s.get('llm_verdict')}({conf}/10)")
+              f"LLM:{s.get('llm_verdict')}({conf}/10){live_str}{pattern_badges}")
         print(Style.RESET_ALL +
               f"      Entry ₹{bp:.2f}  →  Target ₹{tp:.2f}  →  SL ₹{sl:.2f}  "
               f"(Risk {rr}% | 2R reward)")
-        if reasoning:
-            print(f"      🧠 {reasoning[:80]}")
+        # Show per-agent breakdown when multi-LLM panel was used
+        if s.get("panel_method") == "MULTI_LLM":
+            debate_str = ""
+            if s.get("debate_triggered"):
+                debate_str = f"  | Debate->{s.get('debate_winner','?')}"
+            print(Style.RESET_ALL +
+                  f"      Agents: "
+                  f"TECH:{s.get('tech_verdict','?')}({s.get('tech_confidence','?')}/10) "
+                  f"SENT:{s.get('sent_verdict','?')}({s.get('sent_confidence','?')}/10) "
+                  f"RISK:{s.get('risk_verdict','?')}({s.get('risk_confidence','?')}/10)"
+                  f"{debate_str}")
+        # Show live reasoning if available
+        live_reasoning = s.get("live_reasoning", "")
+        if live_reasoning and live_v not in ("SKIPPED", "", None):
+            print(Fore.MAGENTA +
+                  f"      Live: {live_reasoning[:100]}" + Style.RESET_ALL)
+        elif reasoning:
+            print(f"      Reasoning: {reasoning[:100]}")
         print()
 
     print(Fore.GREEN + border + Style.RESET_ALL)
