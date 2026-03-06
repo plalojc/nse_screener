@@ -7,13 +7,38 @@ import json
 import requests
 import pandas as pd
 from datetime import date, datetime, timedelta
-from config import UPSTOX_ACCESS_TOKEN, UPSTOX_BASE_URL, UPSTOX_HIST_URL, LOOKBACK_DAYS
+from config import UPSTOX_ACCESS_TOKEN, UPSTOX_BASE_URL, UPSTOX_HIST_URL, LOOKBACK_DAYS, FILTER_ETFS
 
 
 HEADERS = {
     "accept":        "application/json",
     "Authorization": f"Bearer {UPSTOX_ACCESS_TOKEN}"
 }
+
+# ── ETF detection heuristics ──────────────────────────────────────────────────
+# Upstox NSE.json has no dedicated ETF field; both equities and ETFs carry
+# instrument_type="EQ".  We use three layers to detect and exclude ETFs.
+_ETF_NAME_KEYWORDS   = ("ETF", "BEES", "INDEX FUND", "FOF")
+_ETF_SYMBOL_SUFFIXES = ("ETF", "BEES")
+_ETF_SECURITY_TYPES  = ("ETF", "INDEX")
+
+
+def _is_etf(item: dict) -> bool:
+    """Return True if the instrument is an ETF/index fund to be excluded.
+    Uses multi-layer heuristics because Upstox provides no dedicated ETF field."""
+    # Layer 1: security_type field (future-proof if Upstox adds proper typing)
+    if item.get("security_type", "").upper() in _ETF_SECURITY_TYPES:
+        return True
+    # Layer 2: name contains ETF-related keyword (catches e.g. "Nippon India Silver ETF")
+    name = item.get("name", "").upper()
+    if any(kw in name for kw in _ETF_NAME_KEYWORDS):
+        return True
+    # Layer 3: symbol ends with known ETF suffix (catches HEALTHIETF, GOLDBEES, NIFTYBEES)
+    symbol = item.get("trading_symbol", "").upper()
+    if any(symbol.endswith(sfx) for sfx in _ETF_SYMBOL_SUFFIXES):
+        return True
+    return False
+
 
 # Module-level caches (loaded once per process)
 _INSTRUMENT_MAP:      dict = {}   # trading_symbol -> instrument_key
@@ -38,10 +63,13 @@ def _load_instrument_map() -> dict:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         data = json.loads(gzip.decompress(resp.content))
-        eq_items = [item for item in data if item.get("instrument_type") == "EQ"]
+        eq_items = [item for item in data
+                    if item.get("instrument_type") == "EQ"
+                    and not (FILTER_ETFS and _is_etf(item))]
         _INSTRUMENT_MAP      = {item["trading_symbol"]: item["instrument_key"]         for item in eq_items}
         _INSTRUMENT_NAME_MAP = {item["trading_symbol"]: item.get("name", "")           for item in eq_items}
-        print(f"[Instruments] Loaded {len(_INSTRUMENT_MAP)} EQ instruments.")
+        etf_note = " (ETFs excluded)" if FILTER_ETFS else ""
+        print(f"[Instruments] Loaded {len(_INSTRUMENT_MAP)} EQ instruments{etf_note}.")
     except Exception as e:
         print(f"[Instruments] Failed to load instrument map: {e}")
         _INSTRUMENT_MAP      = {}
@@ -143,7 +171,9 @@ def fetch_nse_instruments() -> pd.DataFrame:
         resp = requests.get(imap_raw_url, timeout=30)
         resp.raise_for_status()
         data = json.loads(gzip.decompress(resp.content))
-        eq = [item for item in data if item.get("instrument_type") == "EQ"]
+        eq = [item for item in data
+              if item.get("instrument_type") == "EQ"
+              and not (FILTER_ETFS and _is_etf(item))]
         df = pd.DataFrame(eq, columns=["trading_symbol","name","instrument_key","lot_size","isin"])
         df.rename(columns={"trading_symbol": "symbol"}, inplace=True)
         return df.reset_index(drop=True)

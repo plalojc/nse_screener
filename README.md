@@ -351,24 +351,26 @@ When enabled, Gemini searches Google for the latest news (last 48 hours) about e
 ```
 Panel Verdict | Gemini Verdict | Final Result
 ──────────────┼────────────────┼─────────────
-CONFIRM       | CONFIRM        | CONFIRM   (double confirmed)
-CONFIRM       | WEAK           | WEAK      (Gemini lacks conviction)
-CONFIRM       | REJECT         | WEAK      (red flag found, downgrade)
-WEAK          | CONFIRM        | CONFIRM   (Gemini upgrades)
+CONFIRM       | CONFIRM        | CONFIRM   (news supports, no change)
+CONFIRM       | WEAK           | CONFIRM   (neutral news doesn't invalidate technicals)
+CONFIRM       | REJECT         | WEAK      (bad news found → downgrade)
+WEAK          | CONFIRM        | WEAK      (good news can't fix technical/risk issues)
 WEAK          | WEAK           | WEAK      (no change)
-WEAK          | REJECT         | REJECT    (both negative)
+WEAK          | REJECT         | REJECT    (bad news confirms weakness)
 ```
 
-### Pipeline position
+**Key design:** Gemini is **protective only** — it can downgrade signals when it finds bad news, but it can **never upgrade** a WEAK signal to CONFIRM. Only Claude (Step 4c) has authority to upgrade.
+
+### Pipeline position & authority hierarchy
 
 ```
-Step 4:  Multi-LLM Panel (Groq)  → panel verdict
-Step 4b: Gemini Validation       → can override panel verdict (free, 500/day)
-Step 4c: Claude Live Validation  → can override current verdict (paid, $10/1K searches)
+Step 4:  Multi-LLM Panel (Groq)  → primary verdict (3-agent ensemble, highest authority)
+Step 4b: Gemini Validation       → protective filter (free, can only DOWNGRADE)
+Step 4c: Claude Live Validation  → final arbiter (paid, can both UP/DOWNGRADE)
 Step 5:  Display & auto-enter
 ```
 
-Gemini runs first (free) to filter signals before Claude (paid) validates survivors.
+Gemini runs first (free) as a safety net to catch bad news. Claude runs last (paid) only on survivors, with full authority to make final calls.
 
 ### Caching
 

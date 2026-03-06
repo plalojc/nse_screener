@@ -32,15 +32,22 @@ from data.database import save_breakout_log
 logger = logging.getLogger(__name__)
 
 
-# ── Override Logic ──────────────────────────────────────────────────────────────
-# Panel Verdict | Live Verdict   | Final Result
-# ─────────────────────────────────────────────
-# CONFIRM       | CONFIRM        | CONFIRM   (double confirmed)
-# CONFIRM       | WEAK           | WEAK      (live data lacks conviction)
-# CONFIRM       | REJECT         | WEAK      (red flag found, downgrade)
-# WEAK          | CONFIRM        | CONFIRM   (live data upgrades)
-# WEAK          | WEAK           | WEAK      (no change)
-# WEAK          | REJECT         | REJECT    (both negative)
+# ── Override Logic (FULL AUTHORITY — can both upgrade and downgrade) ──────────
+#
+# Claude is the FINAL ARBITER (Step 4c) — a thorough paid analysis with live
+# web search, citations, and deep reasoning.  Unlike Gemini (protective-only),
+# Claude has full authority to both UPGRADE and DOWNGRADE:
+#   - Can upgrade WEAK→CONFIRM when it finds strong live catalysts
+#   - Can downgrade CONFIRM→WEAK when it finds red flags
+#
+# Current Verdict | Claude Verdict | Final Result
+# ────────────────────────────────────────────────
+# CONFIRM         | CONFIRM        | CONFIRM   (double confirmed)
+# CONFIRM         | WEAK           | WEAK      (Claude found no support)
+# CONFIRM         | REJECT         | WEAK      (Claude found red flags)
+# WEAK            | CONFIRM        | CONFIRM   (Claude found strong catalysts → upgrade)
+# WEAK            | WEAK           | WEAK      (no change)
+# WEAK            | REJECT         | REJECT    (both negative)
 
 _OVERRIDE_TABLE = {
     ("CONFIRM", "CONFIRM"): "CONFIRM",

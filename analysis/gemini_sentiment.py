@@ -34,21 +34,29 @@ from data.database import save_breakout_log
 logger = logging.getLogger(__name__)
 
 
-# ── Override Logic ──────────────────────────────────────────────────────────────
+# ── Override Logic (PROTECTIVE — can only downgrade, never upgrade) ────────────
+#
+# Rationale: The multi-LLM panel is a thorough 3-agent analysis (TECH + SENT +
+# RISK with debate).  Gemini is a quick web news search — positive news alone
+# should NOT override technical/risk concerns that led to a WEAK panel verdict.
+# Gemini's role is strictly a "red flag detector": it can DOWNGRADE a signal
+# when it finds bad news, but it can NEVER UPGRADE a WEAK signal to CONFIRM.
+# Only Claude (Step 4c, thorough live analysis) has authority to upgrade.
+#
 # Panel Verdict | Gemini Verdict | Final Result
 # ───────────────────────────────────────────────
-# CONFIRM       | CONFIRM        | CONFIRM   (double confirmed)
-# CONFIRM       | WEAK           | WEAK      (Gemini lacks conviction)
-# CONFIRM       | REJECT         | WEAK      (red flag found, downgrade)
-# WEAK          | CONFIRM        | CONFIRM   (Gemini upgrades)
+# CONFIRM       | CONFIRM        | CONFIRM   (news supports, no change)
+# CONFIRM       | WEAK           | CONFIRM   (neutral news doesn't invalidate technicals)
+# CONFIRM       | REJECT         | WEAK      (bad news found → downgrade for safety)
+# WEAK          | CONFIRM        | WEAK      (good news can't fix technical/risk issues)
 # WEAK          | WEAK           | WEAK      (no change)
-# WEAK          | REJECT         | REJECT    (both negative)
+# WEAK          | REJECT         | REJECT    (bad news confirms panel weakness)
 
 _OVERRIDE_TABLE = {
     ("CONFIRM", "CONFIRM"): "CONFIRM",
-    ("CONFIRM", "WEAK"):    "WEAK",
+    ("CONFIRM", "WEAK"):    "CONFIRM",
     ("CONFIRM", "REJECT"):  "WEAK",
-    ("WEAK",    "CONFIRM"): "CONFIRM",
+    ("WEAK",    "CONFIRM"): "WEAK",
     ("WEAK",    "WEAK"):    "WEAK",
     ("WEAK",    "REJECT"):  "REJECT",
 }

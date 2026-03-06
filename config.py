@@ -24,6 +24,7 @@ RSI_OVERBOUGHT       = 75       # RSI above this = skip entry
 MIN_PRICE            = 20       # ignore penny stocks < ₹20
 MAX_PRICE            = 5000     # ignore very expensive stocks
 MIN_MARKET_CAP_CR    = 500      # optional filter (₹500 Cr+)
+FILTER_ETFS          = os.getenv("FILTER_ETFS", "true").lower() == "true"  # exclude ETFs/index funds from universe
 # ── Report output ───────────────────────────────────────────────
 REPORT_DIR           = os.getenv("REPORT_DIR", "reports")
 
