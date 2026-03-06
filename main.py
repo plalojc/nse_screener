@@ -11,7 +11,7 @@ from agent.portfolio_tracker import print_portfolio
 def main():
     parser = argparse.ArgumentParser(description="NSE Breakout Agent")
     parser.add_argument("command", nargs="?", default="scan",
-                        choices=["scan", "portfolio", "schedule", "log", "backtest"],
+                        choices=["scan", "portfolio", "schedule", "log", "backtest", "auth"],
                         help="Command to run (default: scan)")
     parser.add_argument("--date", default=None, metavar="YYYY-MM-DD",
                         help="Override scan date, e.g. --date 2026-02-27")
@@ -44,6 +44,9 @@ def main():
         _print_breakout_log(args.days)
     elif args.command == "backtest":
         _run_backtest(args.date, args.days)
+    elif args.command == "auth":
+        from auth.upstox_auth import refresh_token
+        refresh_token()
 
 
 def _print_breakout_log(days: int):
