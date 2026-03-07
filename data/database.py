@@ -662,3 +662,15 @@ def get_breakout_log(days: int = 30) -> pd.DataFrame:
     )
     conn.close()
     return df
+
+
+def delete_breakout_log(scan_date: str) -> int:
+    """Delete all breakout_log rows for a specific scan_date. Returns rows deleted."""
+    conn = get_conn()
+    cur = conn.execute(
+        "DELETE FROM breakout_log WHERE scan_date = ?", (scan_date,)
+    )
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+    return deleted

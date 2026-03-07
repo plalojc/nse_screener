@@ -191,6 +191,37 @@ GEMINI_SENTIMENT_API_KEY    = os.getenv("GEMINI_SENTIMENT_API_KEY", "")
 GEMINI_SENTIMENT_MODEL      = os.getenv("GEMINI_SENTIMENT_MODEL", "gemini-2.5-flash")
 GEMINI_SENTIMENT_RATE_DELAY = float(os.getenv("GEMINI_SENTIMENT_RATE_DELAY", "1.0"))
 
+# ── Gemini Direct Validator (replaces the multi-LLM panel) ─────────
+# ONE Gemini call per signal with Google Search grounding.
+# Benefits vs the 4-agent panel:
+#   • 1 API call vs 4  →  4× less cost, latency, LLM noise
+#   • Live web search  →  catches breaking news the panel can't see
+#   • Single coherent reasoning (no debate randomness or moderator flip)
+# When enabled, Steps 4b (Gemini sentiment) and 4c (Claude live) are
+# automatically skipped — they would be redundant duplicates.
+#
+# Recommended models (set GEMINI_VALIDATOR_MODEL in .env):
+#   gemini-2.5-flash    — fast, free tier (10 RPM), good accuracy
+#   gemini-2.5-pro      — best accuracy, higher quota cost
+#
+# Rate limits:
+#   Free tier  : 10 RPM  → set GEMINI_VALIDATOR_RATE_DELAY=6.0
+#   Tier 1     : 150 RPM → set GEMINI_VALIDATOR_RATE_DELAY=0.4
+#
+# Get API key at: https://aistudio.google.com/apikey
+# Toggle       : USE_GEMINI_VALIDATOR=true in .env
+USE_GEMINI_VALIDATOR         = os.getenv("USE_GEMINI_VALIDATOR", "false").lower() == "true"
+GEMINI_VALIDATOR_API_KEY     = os.getenv(
+    "GEMINI_VALIDATOR_API_KEY",
+    os.getenv("GEMINI_SENTIMENT_API_KEY", "")   # reuse existing key if set
+)
+GEMINI_VALIDATOR_MODEL       = os.getenv("GEMINI_VALIDATOR_MODEL", "gemini-2.5-flash")
+GEMINI_VALIDATOR_RATE_DELAY  = float(os.getenv("GEMINI_VALIDATOR_RATE_DELAY", "6.0"))
+# Max concurrent async Gemini calls in flight at once.
+# Free tier  (10  RPM): keep at 10 — fires 10 at once, rate limiter throttles to 10/min
+# Paid Tier 1 (150 RPM): raise to 20–50 for near-instant results
+GEMINI_VALIDATOR_CONCURRENCY = int(os.getenv("GEMINI_VALIDATOR_CONCURRENCY", "10"))
+
 # Configurable prompt — covers 6 dimensions: news, orders, earnings, geopolitics,
 # supply/demand, peer contagion. Overridable via GEMINI_SENTIMENT_PROMPT_TEMPLATE in .env.
 # Placeholders: {symbol}, {close}, {signal_type}, {stage}, {rsi}, {vol_ratio},

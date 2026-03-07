@@ -11,7 +11,7 @@ from agent.portfolio_tracker import print_portfolio
 def main():
     parser = argparse.ArgumentParser(description="NSE Breakout Agent")
     parser.add_argument("command", nargs="?", default="scan",
-                        choices=["scan", "portfolio", "schedule", "log", "backtest", "auth"],
+                        choices=["scan", "portfolio", "schedule", "log", "backtest", "auth", "clear-log"],
                         help="Command to run (default: scan)")
     parser.add_argument("--date", default=None, metavar="YYYY-MM-DD",
                         help="Override scan date, e.g. --date 2026-02-27")
@@ -47,6 +47,8 @@ def main():
     elif args.command == "auth":
         from auth.upstox_auth import refresh_token
         refresh_token()
+    elif args.command == "clear-log":
+        _clear_breakout_log(args.date)
 
 
 def _print_breakout_log(days: int):
@@ -135,6 +137,42 @@ def _run_backtest(signal_date: str | None, forward_days: int):
         print(Fore.CYAN + f"\n  📄 Backtest report saved → {html_path}")
     except Exception as exc:
         print(Fore.YELLOW + f"  [WARN] Could not write HTML report: {exc}")
+
+
+def _clear_breakout_log(scan_date: str | None):
+    """Delete all breakout_log entries for a given scan_date."""
+    from colorama import Fore, Style, init
+    from data.database import delete_breakout_log, get_breakout_log
+    init(autoreset=True)
+
+    if not scan_date:
+        print(Fore.RED + "  [ERROR] --date YYYY-MM-DD is required for clear-log.")
+        print(         "  Example: python main.py clear-log --date 2026-02-16")
+        return
+
+    # Show what will be deleted before asking for confirmation
+    import pandas as pd
+    conn_df = get_breakout_log(days=3650)   # load all; filter below
+    existing = conn_df[conn_df["scan_date"] == scan_date] if not conn_df.empty else pd.DataFrame()
+
+    if existing.empty:
+        print(Fore.YELLOW + f"  No breakout_log entries found for {scan_date}.")
+        return
+
+    print(Fore.CYAN + f"\n  Found {len(existing)} entry/entries for {scan_date}:")
+    for _, r in existing.iterrows():
+        verdict = str(r.get("llm_verdict") or "")
+        print(f"    {r['symbol']:<15}  {r['signal_type']:<10}  "
+              f"₹{r['close']}  LLM: {verdict}")
+
+    print()
+    confirm = input(Fore.YELLOW + f"  Delete all {len(existing)} row(s) for {scan_date}? [y/N] ").strip().lower()
+    if confirm != "y":
+        print("  Cancelled.")
+        return
+
+    deleted = delete_breakout_log(scan_date)
+    print(Fore.GREEN + f"  ✓ Deleted {deleted} row(s) from breakout_log for {scan_date}.")
 
 
 if __name__ == "__main__":

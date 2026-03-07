@@ -27,6 +27,15 @@ import os
 from datetime import date
 from pathlib import Path
 
+from config import (
+    ATR_SL_MULTIPLIER,
+    STOP_LOSS_PCT,
+    TOP_PICKS_COUNT,
+    TOP_PICKS_MIN_SCORE,
+    TOP_PICKS_MIN_VOL,
+    TOP_PICKS_RSI_MAX,
+)
+
 
 # ── HTML page templates ───────────────────────────────────────────────────────
 
@@ -45,6 +54,22 @@ _PAGE_HEAD = """\
         tr:nth-child(even) {{ background: #f9f9f9; }}
         tr:hover {{ background: #DAF7A6; cursor: pointer; }}
         td.reason {{ text-align: left; font-size: 11px; color: #444; max-width: 300px; }}
+        /* ── Top Picks ── */
+        .top-picks {{ background:#f0fdf4; border:2px solid #27ae60; border-radius:8px; padding:14px 18px; margin-bottom:20px; }}
+        .top-picks h3 {{ margin:0 0 4px 0; color:#1a6e36; font-size:15px; }}
+        .top-picks .subtitle {{ margin:0 0 12px 0; color:#555; font-size:12px; }}
+        .picks-grid {{ display:flex; flex-wrap:wrap; gap:12px; }}
+        .pick-card {{ background:#fff; border:1px solid #a9dfbf; border-radius:6px; padding:10px 14px; min-width:260px; flex:1 1 260px; max-width:380px; }}
+        .pick-header {{ display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }}
+        .pick-rank {{ font-size:16px; font-weight:bold; color:#27ae60; }}
+        .pick-sym {{ font-size:15px; font-weight:bold; color:#2c3e50; cursor:pointer; text-decoration:underline dotted; }}
+        .pick-price {{ font-size:13px; color:#555; }}
+        .pick-verdict {{ margin-left:auto; font-size:12px; font-weight:bold; background:#27ae60; color:#fff; padding:2px 6px; border-radius:3px; white-space:nowrap; }}
+        .pick-verdict.weak {{ background:#e67e22; }}
+        .pick-setup {{ font-size:12px; margin:4px 0; color:#333; }}
+        .pick-meta {{ font-size:11px; color:#666; margin:2px 0; }}
+        .pick-reason {{ font-size:11px; color:#444; font-style:italic; margin-top:5px; border-top:1px solid #eee; padding-top:4px; }}
+        .no-picks {{ color:#888; font-style:italic; font-size:13px; }}
     </style>
     <script>
         function openChart(symbol) {{
@@ -90,6 +115,98 @@ _PAGE_FOOT = """\
 </body>
 </html>
 """
+
+
+# ── Top Picks helpers ─────────────────────────────────────────────────────
+
+def _compute_sl_tp(sig: dict) -> tuple[float, float, float]:
+    """Return (sl, tp, risk_pct) using ATR-based or swing-low or fallback SL."""
+    close     = sig.get("close") or 0
+    atr       = sig.get("atr14") or 0
+    swing_low = sig.get("swing_low") or 0
+    sl_atr    = round(close - ATR_SL_MULTIPLIER * atr, 2) if atr > 0 else None
+    sl_swing  = round(swing_low * 0.99, 2) if swing_low else None
+    cands     = [x for x in [sl_atr, sl_swing] if x is not None and x < close]
+    sl        = max(cands) if cands else round(close * (1 - STOP_LOSS_PCT / 100), 2)
+    risk      = close - sl
+    tp        = round(close + risk * 2, 2)
+    risk_pct  = round(risk / close * 100, 1) if close else 0
+    return sl, tp, risk_pct
+
+
+def _build_top_picks_html(signals: list, scan_date: str) -> str:
+    """Return the Top Picks <div> block as an HTML string."""
+    # Primary: Stage2 + CONFIRM + hard criteria
+    picks = [
+        s for s in signals
+        if s.get("stage") == "Stage2"
+        and s.get("llm_verdict") == "CONFIRM"
+        and s.get("score", 0)     >= TOP_PICKS_MIN_SCORE
+        and s.get("vol_ratio", 0) >= TOP_PICKS_MIN_VOL
+        and s.get("rsi", 99)      <= TOP_PICKS_RSI_MAX
+    ]
+    # Fallback: relax to WEAK
+    if not picks:
+        picks = [
+            s for s in signals
+            if s.get("stage") == "Stage2"
+            and s.get("llm_verdict") in ("CONFIRM", "WEAK")
+            and s.get("score", 0)     >= TOP_PICKS_MIN_SCORE
+            and s.get("vol_ratio", 0) >= TOP_PICKS_MIN_VOL
+            and s.get("rsi", 99)      <= TOP_PICKS_RSI_MAX
+        ]
+    picks.sort(key=lambda x: (-(x.get("llm_confidence") or 0), -x.get("score", 0)))
+    picks = picks[:TOP_PICKS_COUNT]
+
+    verdict_label = "CONFIRM" if any(p.get("llm_verdict") == "CONFIRM" for p in picks) else "CONFIRM/WEAK"
+    html = (
+        f'    <div class="top-picks">\n'
+        f'        <h3>&#9733; TODAY&#8217;S TOP PICKS &mdash; {scan_date}</h3>\n'
+        f'        <p class="subtitle">Stage2 | LLM {verdict_label} | '
+        f'Score&ge;{TOP_PICKS_MIN_SCORE} | Vol&ge;{TOP_PICKS_MIN_VOL}x | RSI&le;{TOP_PICKS_RSI_MAX}</p>\n'
+    )
+
+    if not picks:
+        html += '        <p class="no-picks">No picks met all criteria today. Check WEAK signals in the table below.</p>\n'
+        html += '    </div>\n'
+        return html
+
+    html += '        <div class="picks-grid">\n'
+    for rank, s in enumerate(picks, 1):
+        sym      = s.get("symbol", "?")
+        close    = s.get("close") or 0
+        score    = s.get("score", 0)
+        rsi      = s.get("rsi")
+        vol      = s.get("vol_ratio")
+        conf     = s.get("llm_confidence")
+        verdict  = s.get("llm_verdict", "WEAK")
+        reason   = (s.get("llm_reasoning") or "")[:160]
+        sl, tp, risk_pct = _compute_sl_tp(s)
+
+        rsi_str  = f"{rsi:.0f}"  if rsi  is not None else "–"
+        vol_str  = f"{vol:.1f}x" if vol  is not None else "–"
+        conf_str = f"{conf}/10"  if conf is not None else "?"
+        v_class  = "" if verdict == "CONFIRM" else " weak"
+
+        html += (
+            f'            <div class="pick-card">\n'
+            f'                <div class="pick-header">\n'
+            f'                    <span class="pick-rank">#{rank}</span>\n'
+            f'                    <span class="pick-sym" onclick="openChart(\'{sym}\')">'
+            f'{sym}</span>\n'
+            f'                    <span class="pick-price">&nbsp;&#8377;{close:.2f}</span>\n'
+            f'                    <span class="pick-verdict{v_class}">{verdict} ({conf_str})</span>\n'
+            f'                </div>\n'
+            f'                <div class="pick-meta">Score: {score} &nbsp;|&nbsp; RSI: {rsi_str} &nbsp;|&nbsp; Vol: {vol_str}</div>\n'
+            f'                <div class="pick-setup">'
+            f'Entry &#8377;{close:.2f} &rarr; Target &#8377;{tp:.2f} &rarr; SL &#8377;{sl:.2f} '
+            f'(Risk {risk_pct}% | 2R reward)</div>\n'
+            f'                <div class="pick-reason">{reason}</div>\n'
+            f'            </div>\n'
+        )
+
+    html += '        </div>\n    </div>\n'
+    return html
 
 _ROW = (
     "            <tr>"
@@ -174,7 +291,8 @@ def write(signals: list[dict], output_dir: str, scan_date: str | None = None) ->
     with open(out_path, "w", encoding="utf-8") as fh:
         # ── Head ──────────────────────────────────────────────────────────────
         fh.write(_PAGE_HEAD.format(date=report_date, total=len(sorted_sigs)))
-
+        # ── Top Picks banner ────────────────────────────────────────────────
+        fh.write(_build_top_picks_html(sorted_sigs, report_date))
         # ── Rows ──────────────────────────────────────────────────────────────
         for sl, s in enumerate(sorted_sigs, 1):
             close    = s.get("close")

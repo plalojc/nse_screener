@@ -84,72 +84,80 @@ def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
 
         # ── 1. Load history capped at signal_date (no future leakage) ────────
         df = load_ohlcv_upto(symbol, signal_date)
-        if len(df) < 60:          # need at least 60 days for EMA200 / indicators
+        if len(df) < 30:          # is_breakout needs ≥30; is_ma_pullback needs ≥60 (self-checked)
             continue
 
-        # ── 2. Detect signal using the same scanners as the live screener ────
-        sig = is_breakout(df) or is_ma_pullback(df)
-        if sig is None:
+        # ── 2. Detect signals using the same scanners as the live screener ──
+        #    Run BOTH scanners (mirrors screener_agent.py which collects all
+        #    signals in a loop — a symbol can produce BREAKOUT + PULLBACK).
+        sigs_found = []
+        for scanner in (is_breakout, is_ma_pullback):
+            sig = scanner(df)
+            if sig is not None:
+                sigs_found.append(sig)
+
+        if not sigs_found:
             continue
 
-        # ── 3. Compute SL and 2R target (mirrors screener_agent.py exactly) ──
-        bp  = sig["close"]
-        atr = sig.get("atr14") or 0
-
-        sl_atr   = round(bp - ATR_SL_MULTIPLIER * atr, 2) if atr > 0 else None
-        sl_swing = round(sig["swing_low"] * 0.99, 2) if sig.get("swing_low") else None
-        cands    = [x for x in [sl_atr, sl_swing] if x is not None and x < bp]
-        sl       = max(cands) if cands else round(bp * (1 - STOP_LOSS_PCT / 100), 2)
-        risk     = bp - sl
-        tp       = round(bp + risk * 2, 2)
-
-        # ── 4. Load forward candles ───────────────────────────────────────────
+        # ── 4. Load forward candles (shared for all signals on this symbol) ──
         fwd = load_ohlcv_range(symbol, signal_date, end_date)
 
-        # ── 5. Walk forward day-by-day ────────────────────────────────────────
-        outcome     = "OPEN"
-        outcome_day = None
-        max_high    = bp     # track best intraday high
-        min_low     = bp     # track worst intraday low
+        for sig in sigs_found:
+            # ── 3. Compute SL and 2R target (mirrors screener_agent.py) ─────
+            bp  = sig["close"]
+            atr = sig.get("atr14") or 0
 
-        for day_idx, (_, row) in enumerate(fwd.iterrows(), 1):
-            h = float(row["high"])
-            l = float(row["low"])
+            sl_atr   = round(bp - ATR_SL_MULTIPLIER * atr, 2) if atr > 0 else None
+            sl_swing = round(sig["swing_low"] * 0.99, 2) if sig.get("swing_low") else None
+            cands    = [x for x in [sl_atr, sl_swing] if x is not None and x < bp]
+            sl       = max(cands) if cands else round(bp * (1 - STOP_LOSS_PCT / 100), 2)
+            risk     = bp - sl
+            tp       = round(bp + risk * 2, 2)
 
-            if h > max_high:
-                max_high = h
-            if l < min_low:
-                min_low = l
+            # ── 5. Walk forward day-by-day ────────────────────────────────────
+            outcome     = "OPEN"
+            outcome_day = None
+            max_high    = bp     # track best intraday high
+            min_low     = bp     # track worst intraday low
 
-            if h >= tp:                   # target hit (intraday high reached / exceeded)
-                outcome     = "WIN"
-                outcome_day = day_idx
-                break
-            if l <= sl:                   # stop loss hit (intraday low broke through SL)
-                outcome     = "LOSS"
-                outcome_day = day_idx
-                break
+            for day_idx, (_, row) in enumerate(fwd.iterrows(), 1):
+                h = float(row["high"])
+                l = float(row["low"])
 
-        forward_close = float(fwd.iloc[-1]["close"]) if not fwd.empty else bp
-        max_gain_pct  = round((max_high    - bp) / bp * 100, 2)
-        max_dd_pct    = round((min_low     - bp) / bp * 100, 2)
-        final_pct     = round((forward_close - bp) / bp * 100, 2)
+                if h > max_high:
+                    max_high = h
+                if l < min_low:
+                    min_low = l
 
-        results.append({
-            **sig,
-            "signal_date":          signal_date,
-            "forward_days":         forward_days,
-            "entry_price":          bp,
-            "target_price":         tp,
-            "stop_loss":            sl,
-            "outcome":              outcome,
-            "outcome_day":          outcome_day,
-            "max_gain_pct":         max_gain_pct,
-            "max_dd_pct":           max_dd_pct,
-            "final_pct":            final_pct,
-            "forward_close":        forward_close,
-            "fwd_candles_available": len(fwd),
-        })
+                if h >= tp:                   # target hit (intraday high reached / exceeded)
+                    outcome     = "WIN"
+                    outcome_day = day_idx
+                    break
+                if l <= sl:                   # stop loss hit (intraday low broke through SL)
+                    outcome     = "LOSS"
+                    outcome_day = day_idx
+                    break
+
+            forward_close = float(fwd.iloc[-1]["close"]) if not fwd.empty else bp
+            max_gain_pct  = round((max_high    - bp) / bp * 100, 2)
+            max_dd_pct    = round((min_low     - bp) / bp * 100, 2)
+            final_pct     = round((forward_close - bp) / bp * 100, 2)
+
+            results.append({
+                **sig,
+                "signal_date":           signal_date,
+                "forward_days":          forward_days,
+                "entry_price":           bp,
+                "target_price":          tp,
+                "stop_loss":             sl,
+                "outcome":               outcome,
+                "outcome_day":           outcome_day,
+                "max_gain_pct":          max_gain_pct,
+                "max_dd_pct":            max_dd_pct,
+                "final_pct":             final_pct,
+                "forward_close":         forward_close,
+                "fwd_candles_available": len(fwd),
+            })
 
     print()   # newline after progress bar
     return results

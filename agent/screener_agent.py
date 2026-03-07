@@ -27,7 +27,9 @@ from config import (MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     LLM_PANEL_MODERATOR_MODEL,
                     USE_LIVE_VALIDATION, LIVE_API_KEY, LIVE_MODEL,
                     GEMINI_SENTIMENT_ENABLED, GEMINI_SENTIMENT_API_KEY,
-                    GEMINI_SENTIMENT_MODEL)
+                    GEMINI_SENTIMENT_MODEL,
+                    USE_GEMINI_VALIDATOR, GEMINI_VALIDATOR_API_KEY,
+                    GEMINI_VALIDATOR_MODEL)
 from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
@@ -196,9 +198,25 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     signals.sort(key=lambda x: x["score"], reverse=True)
 
-    # ── Step 4 – LLM Validation (Multi-Panel or Single-LLM fallback) ──────
+    # ── Step 4 – LLM Validation ──────────────────────────────────────────────
+    # Priority: Gemini Direct Validator > Multi-LLM Panel > Single LLM
     if signals:
-        if LLM_API_KEY:
+        if USE_GEMINI_VALIDATOR:
+            # ── Recommended: single Gemini call + Google Search grounding ────
+            # Replaces the 4-agent panel with 1 focused call.
+            # Steps 4b and 4c are skipped — Gemini already searched live news.
+            print(Fore.YELLOW + f"\n[4/5] Gemini Direct Validator ({len(signals)} signal(s))...")
+            print(Fore.CYAN   + f"      Model  : {GEMINI_VALIDATOR_MODEL}")
+            print(Fore.CYAN   + f"      Source : Gemini + Google Search grounding (live news)")
+            from analysis.gemini_validator import validate_signals_gemini_direct
+            validate_signals_gemini_direct(signals, scan_date=target_date)
+
+            # Persist signals — skip 4b/4c (Gemini already covered news)
+            for sig in signals:
+                save_breakout_log(target_date, sig)
+            print(f"  {len(signals)} signal(s) saved to breakout_log.")
+
+        elif LLM_API_KEY:
             if USE_MULTI_LLM_PANEL:
                 print(Fore.YELLOW + f"\n[4/5] Multi-LLM Panel ({len(signals)} signal(s))...")
                 print(Fore.CYAN   + f"      TECHNICAL : {LLM_PANEL_TECH_MODEL}")
@@ -222,13 +240,16 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 sig["llm_confidence"] = None
                 sig["llm_reasoning"]  = "LLM_API_KEY not set"
 
-        # Persist every signal to breakout_log (date-wise history)
-        for sig in signals:
-            save_breakout_log(target_date, sig)
-        print(f"  {len(signals)} signal(s) saved to breakout_log.")
+        # Persist every signal to breakout_log (panel / single-LLM paths)
+        # (Gemini Direct Validator already saved above — skip to avoid duplicate)
+        if not USE_GEMINI_VALIDATOR:
+            for sig in signals:
+                save_breakout_log(target_date, sig)
+            print(f"  {len(signals)} signal(s) saved to breakout_log.")
 
         # ── Step 4b – Gemini Sentiment Validation (optional) ────────────────
-        if GEMINI_SENTIMENT_ENABLED and GEMINI_SENTIMENT_API_KEY:
+        # Skipped when Gemini Direct Validator is used (already searched live news)
+        if not USE_GEMINI_VALIDATOR and GEMINI_SENTIMENT_ENABLED and GEMINI_SENTIMENT_API_KEY:
             confirmable = [s for s in signals
                            if s.get("llm_verdict") in ("CONFIRM", "WEAK")]
             if confirmable:
@@ -239,14 +260,15 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 validate_signals_gemini(confirmable, scan_date=target_date)
             else:
                 print(Fore.YELLOW + "\n[4b/5] Gemini validation skipped – no CONFIRM/WEAK signals.")
-        elif GEMINI_SENTIMENT_ENABLED and not GEMINI_SENTIMENT_API_KEY:
+        elif not USE_GEMINI_VALIDATOR and GEMINI_SENTIMENT_ENABLED and not GEMINI_SENTIMENT_API_KEY:
             print(Fore.RED + "\n[4b/5] Gemini validation SKIPPED.")
             print(Fore.RED + "       Reason: GEMINI_SENTIMENT_API_KEY is not set.")
             print(Fore.RED + "       Fix   : Add GEMINI_SENTIMENT_API_KEY=your_key to .env")
             print(Fore.RED + "               (get key at https://aistudio.google.com/apikey)")
 
         # ── Step 4c – Live Validation via Claude + Web Search (optional) ──
-        if USE_LIVE_VALIDATION and LIVE_API_KEY:
+        # Skipped when Gemini Direct Validator is used (already searched live news)
+        if not USE_GEMINI_VALIDATOR and USE_LIVE_VALIDATION and LIVE_API_KEY:
             confirmable = [s for s in signals
                            if s.get("llm_verdict") in ("CONFIRM", "WEAK")]
             if confirmable:
@@ -257,7 +279,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 validate_signals_live(confirmable, scan_date=target_date)
             else:
                 print(Fore.YELLOW + "\n[4c/5] Live validation skipped – no CONFIRM/WEAK signals.")
-        elif USE_LIVE_VALIDATION and not LIVE_API_KEY:
+        elif not USE_GEMINI_VALIDATOR and USE_LIVE_VALIDATION and not LIVE_API_KEY:
             print(Fore.RED + "\n[4c/5] Live validation SKIPPED.")
             print(Fore.RED + "       Reason: LIVE_API_KEY is not set.")
             print(Fore.RED + "       Fix   : Add LIVE_API_KEY=your_key to .env")
