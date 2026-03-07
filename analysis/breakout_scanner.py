@@ -46,7 +46,7 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
       8. Supertrend fresh bullish crossover       (+3)  ← NEW
          OR Supertrend already bullish            (+1)  ← NEW
       9. Price above EMA200 (macro bull filter)   (+1)  ← NEW (was unused)
-    Minimum score to emit a signal: 5
+    Minimum score to emit a signal: 6
     """
     if len(df) < 30:
         return None
@@ -67,9 +67,10 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
     score   = 0
     rsi     = last["rsi"]
 
-    # 1. Volume breakout – upgraded: 20-day high + 2x volume = high conviction
+    # 1. Volume breakout – 20-day high + 1.8x volume = high conviction (+3)
+    #    Plain surge 1.5–1.79x = baseline (+1)
     high_20d = last.get("high_20d")
-    if high_20d and not pd.isna(high_20d) and close > high_20d and last["vol_ratio"] >= 2.0:
+    if high_20d and not pd.isna(high_20d) and close > high_20d and last["vol_ratio"] >= 1.8:
         score += 3
         reasons.append(f"20d price breakout + vol {last['vol_ratio']:.1f}x")
     elif last["vol_ratio"] >= VOLUME_SURGE_FACTOR:
@@ -137,7 +138,7 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
         score += 1
         reasons.append("Above EMA200 (macro uptrend)")
 
-    if score < 7:
+    if score < 6:
         return None
 
     stage     = get_stage(df)
@@ -154,11 +155,16 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
         "score":       score,
         "stage":       stage,
         "reasons":     "; ".join(reasons),
-        "ema20":       round(last["ema20"], 2),
-        "ema50":       round(last["ema50"], 2),
-        "atr14":       round(float(atr14), 2) if atr14 is not None and not pd.isna(atr14) else None,
-        "swing_low":   round(swing_low, 2)    if swing_low is not None else None,
-        "high_52w":    round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
+        "ema20":          round(last["ema20"], 2),
+        "ema50":          round(last["ema50"], 2),
+        "ema200":         round(float(ema200), 2) if ema200 is not None and not pd.isna(ema200) else None,
+        "macd_hist":      round(float(last.get("macd_hist")), 4)
+                          if last.get("macd_hist") is not None and not pd.isna(last.get("macd_hist")) else None,
+        "supertrend_dir": int(last.get("supertrend_dir"))
+                          if last.get("supertrend_dir") is not None and not pd.isna(last.get("supertrend_dir")) else None,
+        "atr14":          round(float(atr14), 2) if atr14 is not None and not pd.isna(atr14) else None,
+        "swing_low":      round(swing_low, 2)    if swing_low is not None else None,
+        "high_52w":       round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
     }
 
 
@@ -221,9 +227,14 @@ def is_ma_pullback(df: pd.DataFrame) -> dict | None:
         "stage":       "Stage2",
         "reasons":     (f"50 EMA pullback | RSI={rsi:.0f} oversold | "
                         f"EMA50 defended | macro EMA50>{ema200:.0f}"),
-        "ema20":       round(float(last["ema20"]), 2) if not pd.isna(last.get("ema20")) else None,
-        "ema50":       round(ema50, 2),
-        "atr14":       round(atr14, 2) if atr14 else None,
-        "swing_low":   round(swing_low, 2) if swing_low else None,
-        "high_52w":    round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
+        "ema20":          round(float(last["ema20"]), 2) if not pd.isna(last.get("ema20")) else None,
+        "ema50":          round(ema50, 2),
+        "ema200":         round(ema200, 2),   # already validated non-null above (line 195)
+        "macd_hist":      round(float(last.get("macd_hist")), 4)
+                          if last.get("macd_hist") is not None and not pd.isna(last.get("macd_hist")) else None,
+        "supertrend_dir": int(last.get("supertrend_dir"))
+                          if last.get("supertrend_dir") is not None and not pd.isna(last.get("supertrend_dir")) else None,
+        "atr14":          round(atr14, 2) if atr14 else None,
+        "swing_low":      round(swing_low, 2) if swing_low else None,
+        "high_52w":       round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
     }

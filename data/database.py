@@ -178,6 +178,38 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # ── invalid_instruments: persistent blacklist of ETFs & no-data symbols ────
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS invalid_instruments (
+            symbol   TEXT PRIMARY KEY,
+            reason   TEXT NOT NULL,   -- 'ETF' | 'NO_DATA' | 'MANUAL'
+            source   TEXT NOT NULL,   -- 'AUTO_ETF' | 'SCAN_EMPTY' | 'MANUAL'
+            added_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
+    # One-time migration: scan existing instruments table for ETF-like names
+    # and seed them into invalid_instruments (covers data saved before this filter existed).
+    _etf_name_kw = ("ETF", "BEES", "INDEX FUND", "FOF")
+    existing = cur.execute(
+        "SELECT symbol, instrument_name FROM instruments"
+    ).fetchall()
+    for row in existing:
+        sym  = row[0] or ""
+        name = (row[1] or "").upper()
+        sym_up = sym.upper()
+        is_etf = (
+            any(kw in name for kw in _etf_name_kw)
+            or sym_up.endswith("ETF")
+            or sym_up.endswith("BEES")
+        )
+        if is_etf:
+            cur.execute(
+                "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source)"
+                " VALUES (?, 'ETF', 'AUTO_ETF')",
+                (sym,),
+            )
+
     conn.commit()
     conn.close()
     print("[DB] Tables initialized.")
@@ -571,6 +603,46 @@ def get_panel_verdict_cache(scan_date: str) -> dict:
         }
         for r in rows
     }
+
+
+# ── Invalid Instruments Blacklist ─────────────────────────────────────────────
+
+def add_invalid_instrument(symbol: str, reason: str, source: str) -> None:
+    """Add a single symbol to the blacklist (INSERT OR IGNORE – safe to call repeatedly)."""
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source) VALUES (?, ?, ?)",
+        (symbol, reason, source),
+    )
+    conn.commit()
+    conn.close()
+
+
+def bulk_add_invalid_instruments(rows: list) -> int:
+    """Bulk-insert symbols into the blacklist.
+    Each element must be a dict with keys: symbol, reason, source.
+    Uses INSERT OR IGNORE — safe to re-run every scan (duplicates are skipped).
+    Returns the number of newly inserted rows."""
+    if not rows:
+        return 0
+    conn = get_conn()
+    cur = conn.executemany(
+        "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source)"
+        " VALUES (:symbol, :reason, :source)",
+        rows,
+    )
+    added = cur.rowcount
+    conn.commit()
+    conn.close()
+    return added
+
+
+def get_invalid_symbols() -> set:
+    """Return the full set of blacklisted symbols for O(1) scan-loop filtering."""
+    conn = get_conn()
+    rows = conn.execute("SELECT symbol FROM invalid_instruments").fetchall()
+    conn.close()
+    return {r["symbol"] for r in rows}
 
 
 def get_breakout_log(days: int = 30) -> pd.DataFrame:

@@ -38,6 +38,7 @@ from config import (
     LLM_PANEL_MODERATOR_MODEL,
     LLM_PANEL_MAX_TOKENS, ATR_SL_MULTIPLIER, STOP_LOSS_PCT, MAX_OPEN_POSITIONS,
     PANEL_SEQUENTIAL_MODE, PANEL_AGENT_DELAY,
+    PANEL_TECH_WEIGHT, PANEL_SENT_WEIGHT, PANEL_RISK_WEIGHT,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,16 @@ if not logger.handlers:
 
 
 # ── Consensus weights (must sum to 1.0) ──────────────────────────────────────
-_AGENT_WEIGHTS = {"TECHNICAL": 0.40, "SENTIMENT": 0.35, "RISK": 0.25}
+# Configurable via PANEL_TECH_WEIGHT / PANEL_SENT_WEIGHT / PANEL_RISK_WEIGHT in .env
+# Default: TECH×0.50, SENT×0.20, RISK×0.30 (research-calibrated for sparse news coverage)
+_AGENT_WEIGHTS = {
+    "TECHNICAL": PANEL_TECH_WEIGHT,
+    "SENTIMENT": PANEL_SENT_WEIGHT,
+    "RISK":      PANEL_RISK_WEIGHT,
+}
 _VERDICT_SCORE = {"CONFIRM": 1.0, "WEAK": 0.5, "REJECT": 0.0}
-_CONFIRM_THRESH = 0.68
-_WEAK_THRESH    = 0.38
+_CONFIRM_THRESH = 0.65   # was 0.68 — narrowed grey zone from 30 pts to 23 pts
+_WEAK_THRESH    = 0.42   # was 0.38
 
 
 # ── Data Structures ───────────────────────────────────────────────────────────
@@ -157,8 +164,8 @@ Return ONLY a JSON object (no markdown, no prose):
 
 Verdict guide:
   CONFIRM: Strong multi-indicator confluence (volume + RSI + EMA + MACD align). Stage2. Score >= 10.
-  WEAK: Setup exists but one material flaw (RSI>70, low vol, single-indicator breakout, Stage1/3).
-  REJECT: Technically broken (no volume, overbought RSI>75, extended from EMA50, contradictory signals).
+  WEAK: Setup exists but one material flaw (RSI>75, low vol, single-indicator breakout, Stage1/3).
+  REJECT: Technically broken (no volume, overbought RSI>80, extended from EMA50, contradictory signals).
 """
 
 _SENT_SYSTEM = """You are an NSE equity research analyst specialising in news-driven fundamental
@@ -258,8 +265,20 @@ def _build_tech_prompt(sig: dict) -> str:
     atr_pct   = f"{atr14/close*100:.1f}%" if close else "N/A"
     near_52w  = f"{(high_52w-close)/high_52w*100:.1f}% below" if high_52w else "N/A"
     vol_flag  = "HIGH CONVICTION" if vol_ratio >= 2.0 else ("Moderate" if vol_ratio >= 1.5 else "LOW – watch carefully")
-    rsi_flag  = "OVERBOUGHT WARNING" if rsi > 70 else ("Momentum zone" if rsi >= 55 else "Below momentum zone")
+    rsi_flag  = ("APPROACHING OVERBOUGHT (scanner max=80)" if rsi > 75
+                 else ("Strong momentum zone" if rsi >= 65
+                 else ("Momentum zone" if rsi >= 55
+                 else "Below momentum zone")))
     macd_desc = f"{macd_hist:.4f} ({'bullish crossover' if macd_hist and macd_hist > 0 else 'bearish'})" if macd_hist is not None else "N/A"
+
+    # Supertrend direction (1=bullish, -1=bearish, None=N/A)
+    st_dir = sig.get("supertrend_dir")
+    if st_dir == 1:
+        st_desc = "BULLISH (price above supertrend — uptrend confirmed)"
+    elif st_dir == -1:
+        st_desc = "BEARISH (price below supertrend — caution)"
+    else:
+        st_desc = "N/A"
 
     return f"""
 NSE BREAKOUT SIGNAL – TECHNICAL ANALYSIS REQUEST
@@ -280,6 +299,7 @@ Swing Low   : ₹{_fmt(sig.get('swing_low'), '{:.2f}')}
 ── MOMENTUM ───────────────────────────────────
 RSI (14)    : {rsi:.1f}   >> {rsi_flag}
 MACD Hist   : {macd_desc}
+Supertrend  : {st_desc}
 
 ── VOLUME ─────────────────────────────────────
 Vol Ratio   : {vol_ratio:.2f}x 20-day avg   >> {vol_flag}
@@ -348,7 +368,9 @@ def _build_risk_prompt(sig: dict, open_count: int) -> str:
     rr_ratio    = round(tp_dist_pct / sl_dist_pct, 1) if sl_dist_pct > 0 else 0
     near_52w_pct = round((high_52w - close) / high_52w * 100, 1) if high_52w else 0
 
-    rsi_risk  = "HIGH" if rsi > 72 else ("MEDIUM" if rsi > 65 else "LOW")
+    rsi_risk  = ("HIGH (near scanner ceiling 80)" if rsi > 76
+                 else ("MEDIUM-HIGH" if rsi > 70
+                 else ("MEDIUM" if rsi > 62 else "LOW")))
     liq_risk  = "STRONG" if vol_ratio >= 2.0 else ("ADEQUATE" if vol_ratio >= 1.5 else "WEAK — gap risk")
     pos_note  = f"{open_count}/{MAX_OPEN_POSITIONS}" if open_count >= 0 else "N/A"
     slots_free = max(0, MAX_OPEN_POSITIONS - (open_count or 0))
@@ -530,12 +552,12 @@ def _compute_weighted_score(verdicts: Dict[str, AgentVerdict]) -> float:
     total = 0.0
     for name, v in verdicts.items():
         if v.failed:
-            # Failed agent contributes a neutral score
-            total += _AGENT_WEIGHTS.get(name, 0.33) * 0.5 * 0.85
+            # Failed agent = pure neutral: no confidence multiplier (0.5 × weight)
+            total += _AGENT_WEIGHTS.get(name, 0.33) * 0.5
             continue
         w       = _AGENT_WEIGHTS.get(name, 0.33)
         score   = _VERDICT_SCORE.get(v.verdict, 0.5)
-        conf_m  = 0.7 + (v.confidence / 10.0) * 0.3   # 0.70 to 1.00
+        conf_m  = 0.50 + (v.confidence / 10.0) * 0.50   # 0.55 to 1.00 (wider range = harsher low-confidence penalty)
         total  += w * score * conf_m
     return round(total, 4)
 
@@ -545,7 +567,10 @@ def _should_trigger_debate(verdicts: Dict[str, AgentVerdict], score: float) -> b
     Trigger debate when:
     1. TECHNICAL=CONFIRM AND SENTIMENT=REJECT (technical vs fundamental conflict)
     2. Any CONFIRM AND RISK=REJECT (risk manager veto)
-    3. Score in grey zone [0.38, 0.68] (genuinely borderline)
+    3. Score in grey zone [0.42, 0.65] (genuinely borderline — narrowed from 0.38-0.68)
+
+    Do NOT trigger when only 1 agent is CONFIRM and others are WEAK (no real disagreement):
+    e.g. TECH=CONFIRM, SENT=WEAK, RISK=WEAK → just output WEAK directly, save 3 LLM calls.
     """
     tech = verdicts.get("TECHNICAL")
     sent = verdicts.get("SENTIMENT")
@@ -563,8 +588,14 @@ def _should_trigger_debate(verdicts: Dict[str, AgentVerdict], score: float) -> b
             if v and not v.failed and v.verdict == "CONFIRM":
                 return True
 
-    # Grey zone
+    # Grey zone — but skip if only 1 agent is CONFIRM and no agent is REJECT
     if _WEAK_THRESH <= score <= _CONFIRM_THRESH:
+        active = [v for v in verdicts.values() if not v.failed]
+        confirm_count = sum(1 for v in active if v.verdict == "CONFIRM")
+        reject_count  = sum(1 for v in active if v.verdict == "REJECT")
+        # Sole CONFIRM + all others WEAK = no genuine conflict → output WEAK without debate
+        if confirm_count == 1 and reject_count == 0:
+            return False
         return True
 
     return False

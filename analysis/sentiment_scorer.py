@@ -58,8 +58,11 @@ def _classify_article(title: str, body: str, symbol: str) -> dict:
     relevance = 3   # baseline (market news)
     if sym_lower in text:
         relevance = 9   # direct mention of ticker
-    elif len(sym_lower) >= 4 and sym_lower[:4] in text:
-        relevance = 6   # partial match (e.g. "TATA" in "Tata Motors")
+    elif len(sym_lower) >= 4 and sym_lower[:min(6, len(sym_lower))] in text:
+        # Partial match — require at least 6 chars to avoid cross-entity pollution:
+        # e.g. "HDFC" (4 chars) matches HDFCBANK/HDFCAMC/HDFCLIFE articles incorrectly;
+        # "HDFCBA" (6 chars) is unique enough. For short 4-5 char symbols, use the full symbol.
+        relevance = 6
 
     # Count keyword hits
     strong_bull = sum(1 for kw in _BULLISH_STRONG if kw in text)

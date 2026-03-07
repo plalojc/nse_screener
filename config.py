@@ -20,7 +20,7 @@ DB_PATH = "nse_agent.db"
 LOOKBACK_DAYS        = 365      # days of history to fetch (1 full year)
 VOLUME_SURGE_FACTOR  = 1.5      # volume must be 1.5x 20-day avg
 RSI_BREAKOUT_MIN     = 55       # RSI above this = momentum
-RSI_OVERBOUGHT       = 75       # RSI above this = skip entry
+RSI_OVERBOUGHT       = 80       # RSI above this = skip entry (raised 75→80: strong trending stocks run hot)
 MIN_PRICE            = 20       # ignore penny stocks < ₹20
 MAX_PRICE            = 5000     # ignore very expensive stocks
 MIN_MARKET_CAP_CR    = 500      # optional filter (₹500 Cr+)
@@ -32,7 +32,7 @@ REPORT_DIR           = os.getenv("REPORT_DIR", "reports")
 TOP_PICKS_COUNT      = 7        # max stocks to show in the final shortlist
 TOP_PICKS_MIN_SCORE  = 10       # must have strong multi-factor confluence
 TOP_PICKS_MIN_VOL    = 1.8      # meaningful volume surge (1.8x 20-day avg)
-TOP_PICKS_RSI_MAX    = 70       # not overbought (stricter than global 75)
+TOP_PICKS_RSI_MAX    = 75       # not overbought (stricter than global 80; raised 70→75)
 # ── Position / Risk management ───────────────────────────
 PROFIT_TARGET_PCT    = 10.0     # ceiling exit at +10% (trailing stop handles the rest)
 STOP_LOSS_PCT        = 5.0      # fallback SL % when ATR data is unavailable
@@ -113,6 +113,15 @@ LLM_PANEL_MAX_TOKENS = int(os.getenv("LLM_PANEL_MAX_TOKENS", "512"))
 PANEL_SEQUENTIAL_MODE = os.getenv("PANEL_SEQUENTIAL_MODE", "false").lower() == "true"
 PANEL_AGENT_DELAY     = float(os.getenv("PANEL_AGENT_DELAY", "1.0"))
 
+# Consensus weights for the 3-agent panel (must sum to 1.0).
+# Research (FinAgent arXiv 2402.18679, TradingAgents arXiv 2412.20138) recommends
+# TECH ≥ 0.50 when news coverage is sparse — typical for NSE mid/small-cap breakouts
+# where RSS feeds yield 0-2 headlines per symbol. Increase SENT weight if MarketAux
+# (USE_MARKETAUX=true) or Gemini are providing richer entity-scored news data.
+PANEL_TECH_WEIGHT = float(os.getenv("PANEL_TECH_WEIGHT", "0.50"))
+PANEL_SENT_WEIGHT = float(os.getenv("PANEL_SENT_WEIGHT", "0.20"))
+PANEL_RISK_WEIGHT = float(os.getenv("PANEL_RISK_WEIGHT", "0.30"))
+
 # ── Live Validation (Claude + Web Search) ───────────────────────
 # Optional 2nd-pass validation using Claude Opus 4.6 with server-side web search.
 # Claude automatically searches the web for real-time news and cites sources.
@@ -181,3 +190,74 @@ GEMINI_SENTIMENT_ENABLED    = os.getenv("USE_GEMINI_SENTIMENT", "false").lower()
 GEMINI_SENTIMENT_API_KEY    = os.getenv("GEMINI_SENTIMENT_API_KEY", "")
 GEMINI_SENTIMENT_MODEL      = os.getenv("GEMINI_SENTIMENT_MODEL", "gemini-2.5-flash")
 GEMINI_SENTIMENT_RATE_DELAY = float(os.getenv("GEMINI_SENTIMENT_RATE_DELAY", "1.0"))
+
+# Configurable prompt — covers 6 dimensions: news, orders, earnings, geopolitics,
+# supply/demand, peer contagion. Overridable via GEMINI_SENTIMENT_PROMPT_TEMPLATE in .env.
+# Placeholders: {symbol}, {close}, {signal_type}, {stage}, {rsi}, {vol_ratio},
+#               {panel_verdict}, {panel_reasoning}
+GEMINI_SENTIMENT_PROMPT_TEMPLATE = os.getenv("GEMINI_SENTIMENT_PROMPT_TEMPLATE", """
+You are a financial news analyst for NSE India stocks. Validate whether {symbol}'s breakout signal has fundamental support.
+
+SIGNAL CONTEXT:
+- Symbol: {symbol} (NSE India) | Price: Rs.{close}
+- Signal: {signal_type} | Stage: {stage} | RSI: {rsi} | Volume: {vol_ratio}x avg
+- Technical Panel: {panel_verdict} -- "{panel_reasoning}"
+
+Search the web and analyze {symbol} across ALL 6 dimensions (search window: last 7 days):
+
+1. NEWS & BREAKING EVENTS
+   Query: "{symbol} NSE news site:economictimes.com OR site:moneycontrol.com OR site:business-standard.com"
+   -> Any major positive/negative news in last 48 hours?
+
+2. ORDERS & CONTRACTS
+   Query: "{symbol} order win contract announcement 2026"
+   -> New orders received? Size relative to annual revenue? Orders lost or cancelled?
+
+3. QUARTERLY RESULTS & EARNINGS
+   Query: "{symbol} quarterly results Q3 Q4 earnings 2025 2026"
+   -> Revenue growth? Margin trend? EPS vs analyst estimates (beat/miss)?
+   -> Management guidance: raised, maintained, or cut?
+
+4. GEOPOLITICS & GOVERNMENT POLICY
+   Query: "{symbol} sector government policy budget PLI tariff regulation 2026"
+   -> Government contracts, PLI scheme benefit, budget allocation for the sector?
+   -> Import/export restrictions? SEBI/RBI/Ministry regulatory notices?
+
+5. SUPPLY & DEMAND
+   Query: "{symbol} sector demand supply chain capacity input cost 2026"
+   -> Input cost pressure or relief (raw materials, energy, logistics)?
+   -> Sector demand outlook: growing, stable, or declining?
+   -> Competitor capacity expansion or shutdown? Pricing power trend?
+
+6. PEER & SECTOR CONTAGION
+   Query: "{symbol} competitor sector peer results outlook 2026"
+   -> Did a key competitor report strong or weak results (sector signal)?
+   -> Any sector-wide catalyst (policy, global commodity, index rebalancing)?
+   -> Customer or supplier news that directly affects {symbol}?
+
+Return ONLY valid JSON (no markdown, no code fences):
+{{
+  "sentiment": "BULLISH or BEARISH or NEUTRAL",
+  "confidence": 1-10,
+  "reasoning": "2-3 sentences citing specific findings across dimensions",
+  "key_findings": {{
+    "orders": "one-line summary or null",
+    "earnings": "one-line summary or null",
+    "geopolitics": "one-line summary or null",
+    "supply_demand": "one-line summary or null",
+    "peer_impact": "one-line summary or null"
+  }},
+  "articles": [
+    {{"title": "headline", "source": "publication name", "sentiment": "positive/negative/neutral"}}
+  ]
+}}
+
+Decision Rules:
+- BULLISH: 2 or more of (order win, earnings beat, policy tailwind, sector demand up, positive peer spillover)
+- BEARISH: ANY single severe negative (SEBI probe, fraud allegation, major loss, order cancellation, severe input cost spike)
+- NEUTRAL: no relevant recent news, mixed signals, or only news older than 7 days
+- confidence 8-10: multiple strong signals in the same direction with credible sources
+- confidence 4-6: single moderate signal or conflicting signals
+- confidence 1-3: speculation, unconfirmed reports, or stale news only
+- Include up to 5 most relevant articles; always cite actual source names
+""".strip())

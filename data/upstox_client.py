@@ -174,6 +174,30 @@ def fetch_nse_instruments() -> pd.DataFrame:
         eq = [item for item in data
               if item.get("instrument_type") == "EQ"
               and not (FILTER_ETFS and _is_etf(item))]
+
+        # Persist ETFs to the invalid_instruments blacklist.
+        # Only inserts when the count in JSON differs from the count in DB
+        # (first run, or NSE listed a new ETF) — avoids all DB work on daily re-runs.
+        if FILTER_ETFS:
+            etf_items = [item for item in data
+                         if item.get("instrument_type") == "EQ" and _is_etf(item)]
+            if etf_items:
+                from data.database import bulk_add_invalid_instruments, get_conn as _get_db_conn
+                _c = _get_db_conn()
+                existing_etf_count = _c.execute(
+                    "SELECT COUNT(*) FROM invalid_instruments WHERE source='AUTO_ETF'"
+                ).fetchone()[0]
+                _c.close()
+                if existing_etf_count < len(etf_items):
+                    # New ETFs found (first run or NSE listed a new fund)
+                    etf_rows = [
+                        {"symbol": x["trading_symbol"], "reason": "ETF", "source": "AUTO_ETF"}
+                        for x in etf_items
+                    ]
+                    added = bulk_add_invalid_instruments(etf_rows)
+                    if added:
+                        print(f"  [Instruments] {added} new ETFs added to invalid_instruments blacklist.")
+
         df = pd.DataFrame(eq, columns=["trading_symbol","name","instrument_key","lot_size","isin"])
         df.rename(columns={"trading_symbol": "symbol"}, inplace=True)
         return df.reset_index(drop=True)

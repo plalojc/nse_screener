@@ -28,6 +28,7 @@ from config import (
     GEMINI_SENTIMENT_ENABLED,
     GEMINI_SENTIMENT_MODEL,
     GEMINI_SENTIMENT_RATE_DELAY,
+    GEMINI_SENTIMENT_PROMPT_TEMPLATE,
 )
 from data.database import save_breakout_log
 
@@ -71,39 +72,10 @@ def _apply_override(panel_verdict: str, gemini_verdict: str) -> str:
 
 
 # ── Prompt for Gemini ────────────────────────────────────────────────────
-
-_SENTIMENT_PROMPT = """
-You are a financial news sentiment analyst for NSE India stocks.
-Search the web for the LATEST news (last 48 hours) about {symbol} on NSE India.
-
-Focus on:
-1. Recent earnings, quarterly results, order wins, contract announcements
-2. Analyst upgrades/downgrades, target price changes
-3. FII/DII activity, promoter buying/selling/pledging
-4. SEBI notices, regulatory actions, fraud allegations
-5. Sector-wide news that affects this stock
-
-After searching, return ONLY a valid JSON object (no markdown, no code fences):
-{{
-  "sentiment": "BULLISH or BEARISH or NEUTRAL",
-  "confidence": 1-10,
-  "reasoning": "2-3 sentences summarizing what you found",
-  "articles": [
-    {{
-      "title": "headline of the article",
-      "source": "publication name",
-      "sentiment": "positive or negative or neutral"
-    }}
-  ]
-}}
-
-Rules:
-- If you find POSITIVE catalysts (earnings beat, upgrade, order win): sentiment BULLISH
-- If you find NEGATIVE news (downgrade, SEBI probe, loss, fraud): sentiment BEARISH
-- If you find NO relevant recent news or mixed signals: sentiment NEUTRAL, confidence 4-5
-- Include up to 5 most relevant articles in the articles array
-- Always cite the actual source name (e.g., "Economic Times", "Moneycontrol")
-"""
+# Prompt is now configured in config.py as GEMINI_SENTIMENT_PROMPT_TEMPLATE.
+# It covers 6 dimensions: news, orders, earnings, geopolitics,
+# supply/demand, peer contagion — and accepts full signal context as placeholders.
+# Override via GEMINI_SENTIMENT_PROMPT_TEMPLATE in .env.
 
 
 # ── DB cache ─────────────────────────────────────────────────────────────
@@ -142,9 +114,11 @@ def _save_cache(symbol: str, scan_date: str, data: dict):
 
 # ── API call ─────────────────────────────────────────────────────────────
 
-def _call_gemini(symbol: str) -> Optional[dict]:
+def _call_gemini(sig: dict) -> Optional[dict]:
     """
-    Call Gemini 2.5 Flash with Google Search grounding for a single symbol.
+    Call Gemini 2.5 Flash with Google Search grounding for a single signal.
+    Accepts the full signal dict so the prompt can include price, RSI, volume,
+    signal type, panel verdict, and reasoning for richer 6-dimension analysis.
     Returns parsed sentiment dict or None.
     """
     try:
@@ -159,8 +133,23 @@ def _call_gemini(symbol: str) -> Optional[dict]:
         logger.warning("[GeminiSent] GEMINI_SENTIMENT_API_KEY not set in .env")
         return None
 
+    symbol = sig.get("symbol", "")
     client = genai.Client(api_key=GEMINI_SENTIMENT_API_KEY)
-    prompt = _SENTIMENT_PROMPT.format(symbol=symbol)
+
+    # Build prompt with full signal context so Gemini knows WHY we're asking
+    rsi_val      = sig.get("rsi")
+    vol_val      = sig.get("vol_ratio")
+    panel_reason = (sig.get("llm_reasoning") or "N/A")[:200]
+    prompt = GEMINI_SENTIMENT_PROMPT_TEMPLATE.format(
+        symbol        = symbol,
+        close         = sig.get("close", "N/A"),
+        signal_type   = sig.get("signal_type", "BREAKOUT"),
+        stage         = sig.get("stage", "N/A"),
+        rsi           = round(rsi_val, 1) if rsi_val is not None else "N/A",
+        vol_ratio     = round(vol_val, 2) if vol_val is not None else "N/A",
+        panel_verdict = sig.get("llm_verdict", "N/A"),
+        panel_reasoning = panel_reason,
+    )
 
     MAX_RETRIES = 3
     for retry in range(MAX_RETRIES):
@@ -349,13 +338,25 @@ def _normalize_report(parsed: dict) -> dict:
             })
             seen_titles.add(title.lower())
 
+    # Append key_findings summary to reasoning so it's stored in gemini_reasoning column
+    key_findings = parsed.get("key_findings") or {}
+    if isinstance(key_findings, dict):
+        findings_parts = [
+            f"{k}: {v}"
+            for k, v in key_findings.items()
+            if v and str(v).lower() not in ("null", "none", "")
+        ]
+        if findings_parts:
+            findings_summary = "; ".join(findings_parts)
+            reasoning = f"{reasoning} | Findings: {findings_summary}"
+
     return {
         "article_count":      len(articles),
         "articles":           articles,
         "avg_sentiment":      round(avg_score, 3),
         "dominant_sentiment": sentiment,          # BULLISH / BEARISH / NEUTRAL
         "verdict":            verdict,             # CONFIRM / WEAK / REJECT
-        "gemini_reasoning":   reasoning[:300],
+        "gemini_reasoning":   reasoning[:500],    # extended to 500 chars for richer output
         "confidence":         confidence,
         "source":             "Gemini",
     }
@@ -363,9 +364,17 @@ def _normalize_report(parsed: dict) -> dict:
 
 # ── Single-symbol sentiment fetch (cache-first) ─────────────────────────
 
-def get_gemini_sentiment(symbol: str, scan_date: str) -> dict:
+def get_gemini_sentiment(symbol: str, scan_date: str, sig: dict = None) -> dict:
     """
     Fetch Gemini grounded news sentiment for a symbol (cache-first).
+
+    Args:
+        symbol:    NSE trading symbol (e.g. "TEJASNET")
+        scan_date: ISO date string for cache key (e.g. "2026-03-07")
+        sig:       Full signal dict (optional). When provided, passes price,
+                   RSI, volume, signal type, and panel verdict to Gemini so the
+                   prompt includes rich context for 6-dimension analysis.
+                   Falls back to symbol-only dict if not supplied.
 
     Returns structured dict (see _normalize_report) or empty dict
     when disabled, API key missing, or any failure occurs.
@@ -381,7 +390,8 @@ def get_gemini_sentiment(symbol: str, scan_date: str) -> dict:
         return cached
 
     # ── API call ─────────────────────────────────────────────────────
-    parsed = _call_gemini(symbol)
+    # Use full signal dict if provided; fall back to symbol-only minimal dict
+    parsed = _call_gemini(sig if sig is not None else {"symbol": symbol})
     if parsed is None:
         return {}
 
@@ -455,7 +465,8 @@ def validate_signals_gemini(signals: list, scan_date: str):
             continue
 
         # Cache miss — call Gemini with Google Search grounding
-        report = get_gemini_sentiment(symbol, scan_date)
+        # Pass full sig dict so the prompt includes price, RSI, volume, panel verdict
+        report = get_gemini_sentiment(symbol, scan_date, sig=sig)
 
         if not report:
             # API call failed or disabled

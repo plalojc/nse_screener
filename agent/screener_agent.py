@@ -11,7 +11,8 @@ from data.database       import (init_db, save_ohlcv, save_signal,
                                   open_position, get_open_positions,
                                   ohlcv_latest_date, load_ohlcv,
                                   save_breakout_log, get_ohlcv_date_map,
-                                  save_instruments)
+                                  save_instruments,
+                                  get_invalid_symbols, add_invalid_instrument)
 from data.upstox_client  import fetch_historical, fetch_nse_instruments
 from analysis.breakout_scanner import is_breakout, is_ma_pullback
 from analysis.news_fetcher     import fetch_and_store_news, get_news_for_symbol
@@ -126,11 +127,16 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     print(f"  {n} new articles cached.")
 
     # ── Step 3 – Build universe ───────────────────────────────────────────────
+    # Load blacklist once here — used to pre-filter the universe before the loop
+    invalid_symbols = get_invalid_symbols()
+
     if symbols:
-        universe = symbols
-        print(Fore.YELLOW + f"\n[3/5] Scanning {len(universe)} provided symbols...")
-        # Ensure every custom symbol has a row in instruments (FK safety)
-        _ensure_instruments(symbols)
+        raw_count = len(symbols)
+        universe  = [s for s in symbols if s not in invalid_symbols]
+        _ensure_instruments(universe)   # FK safety for custom symbols
+        removed = raw_count - len(universe)
+        print(Fore.YELLOW + f"\n[3/5] Scanning {len(universe)} provided symbols"
+              + (f" ({removed} blacklisted removed)." if removed else "."))
     else:
         print(Fore.YELLOW + "\n[3/5] Loading NSE EQ universe...")
         instruments_df = fetch_nse_instruments()
@@ -138,8 +144,10 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             print(Fore.RED + "  [ERROR] Could not load NSE instruments. Aborting scan.")
             return []
         save_instruments(instruments_df)   # persist symbol/key/name to instruments table
-        universe = instruments_df["symbol"].tolist()
-        print(f"  Universe: {len(universe)} NSE EQ instruments.")
+        raw_count = len(instruments_df)
+        universe  = [s for s in instruments_df["symbol"].tolist() if s not in invalid_symbols]
+        print(f"  Universe: {len(universe)} NSE EQ instruments "
+              f"({raw_count - len(universe)} blacklisted removed).")
 
     # ── Step 3 – Scan universe ────────────────────────────────────────────────
     signals     = []
@@ -172,6 +180,9 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 downloaded += 1
 
         if df.empty:
+            # Permanently blacklist symbols that never return data (delisted / suspended)
+            add_invalid_instrument(symbol, "NO_DATA", "SCAN_EMPTY")
+            invalid_symbols.add(symbol)   # update in-memory set for this run too
             continue
 
         for scanner in (is_breakout, is_ma_pullback):
