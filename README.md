@@ -4,7 +4,7 @@ A focused NSE equity breakout scanner.
 
 The project now uses only:
 
-- Upstox for NSE instruments, OHLCV data, and live prices
+- Upstox or NSE Bhavcopy for NSE instruments/OHLCV data
 - Gemini with Google Search grounding to validate trade signals
 - SQLite for local cache/history
 - HTML reports for scan and backtest output
@@ -31,6 +31,7 @@ nse_breakout_agent/
 |   |-- upstox_auth.py
 |-- data/
 |   |-- upstox_client.py
+|   |-- nse_bhavcopy_client.py
 |   |-- database.py
 |-- report/
 |   |-- html_report_writer.py
@@ -48,6 +49,7 @@ copy env.example .env
 Edit `.env` and set:
 
 ```env
+DATA_SOURCE=upstox
 UPSTOX_CLIENT_ID=...
 UPSTOX_CLIENT_SECRET=...
 UPSTOX_REDIRECT_URI=http://127.0.0.1:8765/callback
@@ -66,6 +68,24 @@ Run a scan:
 .\venv\Scripts\python.exe main.py scan
 ```
 
+## NSE Bhavcopy Data
+
+To use NSE Bhavcopy instead of Upstox historical candles:
+
+```env
+DATA_SOURCE=nse_bhavcopy
+NSE_BHAVCOPY_DB_PATH=nse_bhavcopy.db
+NSE_BHAVCOPY_DIR=data/bhavcopy
+```
+
+Then run:
+
+```powershell
+.\venv\Scripts\python.exe main.py scan
+```
+
+The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters `SERIES == EQ`, stores OHLCV in `nse_bhavcopy.db`, and runs the same breakout logic over that cache. Upstox remains available for `DATA_SOURCE=upstox` and for OAuth/LTP workflows.
+
 ## Commands
 
 ```powershell
@@ -80,9 +100,9 @@ Run a scan:
 
 ## Flow
 
-1. Load NSE EQ instruments from Upstox.
+1. Load NSE EQ instruments from the configured data source.
 2. Filter invalid instruments and ETFs.
-3. Load OHLCV from SQLite cache or fetch fresh data from Upstox.
+3. Load OHLCV from SQLite cache or fetch fresh data.
 4. Detect breakout and pullback setups.
 5. Validate each signal with Gemini and Google Search grounding.
 6. Save signal history to SQLite.

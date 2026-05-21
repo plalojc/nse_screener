@@ -13,12 +13,18 @@ from data.database       import (init_db, save_ohlcv, save_signal,
                                   save_breakout_log, get_ohlcv_date_map,
                                   save_instruments,
                                   get_invalid_symbols, add_invalid_instrument)
-from data.upstox_client  import fetch_historical, fetch_nse_instruments
+from data.upstox_client  import fetch_historical as fetch_upstox_historical
+from data.upstox_client  import fetch_nse_instruments as fetch_upstox_instruments
+from data.nse_bhavcopy_client import fetch_historical as fetch_bhavcopy_historical
+from data.nse_bhavcopy_client import fetch_nse_instruments as fetch_bhavcopy_instruments
+from data.nse_bhavcopy_client import get_ohlcv_date_map as get_bhavcopy_date_map
+from data.nse_bhavcopy_client import load_ohlcv as load_bhavcopy_ohlcv
+from data.nse_bhavcopy_client import update_bhavcopy_cache
 from analysis.breakout_scanner import is_breakout, is_ma_pullback
 from analysis.news_fetcher     import fetch_and_store_news, get_news_for_symbol
 from analysis.gemini_validator import validate_signals_gemini_direct
 from agent.portfolio_tracker   import check_exit_signals
-from config import (MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
+from config import (DATA_SOURCE, MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, TOP_PICKS_COUNT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
                     TOP_PICKS_RSI_MAX, REPORT_DIR,
@@ -26,6 +32,14 @@ from config import (MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
 from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
+
+
+def _using_bhavcopy() -> bool:
+    return DATA_SOURCE == "nse_bhavcopy"
+
+
+def _source_name() -> str:
+    return "NSE Bhavcopy" if _using_bhavcopy() else "Upstox"
 
 
 # â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -36,14 +50,17 @@ def _ensure_instruments(symbols: list):
     Used when the caller passes symbols directly (bypassing fetch_nse_instruments).
     Keeps the instruments table consistent so the ohlcv FK is always satisfied.
     """
-    from data.upstox_client import get_instrument_key, get_instrument_name
     rows = []
     for sym in symbols:
-        try:
-            ikey = get_instrument_key(sym)
-        except KeyError:
-            ikey = ""
-        rows.append({"symbol": sym, "instrument_key": ikey, "name": get_instrument_name(sym)})
+        if _using_bhavcopy():
+            rows.append({"symbol": sym, "instrument_key": sym, "name": sym})
+        else:
+            from data.upstox_client import get_instrument_key, get_instrument_name
+            try:
+                ikey = get_instrument_key(sym)
+            except KeyError:
+                ikey = ""
+            rows.append({"symbol": sym, "instrument_key": ikey, "name": get_instrument_name(sym)})
     if rows:
         import pandas as pd
         save_instruments(pd.DataFrame(rows))
@@ -74,8 +91,8 @@ def _get_ohlcv(symbol: str, target_date: str, scan_date: str = None) -> pd.DataF
     if cached and cached >= target_date:
         return load_ohlcv(symbol)           # cache hit
 
-    # cache miss â€“ download from Upstox
-    df = fetch_historical(symbol, scan_date=scan_date)
+    # cache miss - download from Upstox
+    df = fetch_upstox_historical(symbol, scan_date=scan_date)
     if not df.empty:
         save_ohlcv(symbol, df)
     return df
@@ -101,10 +118,19 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     target_date = _effective_scan_date(scan_date)
     print(Fore.CYAN + f"   Scan date : {target_date}")
+    print(Fore.CYAN + f"   Data      : {_source_name()}")
     if force_refresh:
         print(Fore.YELLOW + "   Mode      : FORCE REFRESH (ignoring OHLCV cache)")
 
     init_db()
+
+    if _using_bhavcopy():
+        latest = update_bhavcopy_cache(scan_date=target_date)
+        if not latest:
+            print(Fore.RED + "  [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
+            return []
+        target_date = latest
+        print(Fore.CYAN + f"   Bhavcopy  : using cached trading date {target_date}")
 
     # â”€â”€ Step 1 â€“ Exit check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print(Fore.YELLOW + "\n[1/5] Checking exit conditions...")
@@ -134,7 +160,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
               + (f" ({removed} blacklisted removed)." if removed else "."))
     else:
         print(Fore.YELLOW + "\n[3/5] Loading NSE EQ universe...")
-        instruments_df = fetch_nse_instruments()
+        instruments_df = fetch_bhavcopy_instruments() if _using_bhavcopy() else fetch_upstox_instruments()
         if instruments_df.empty:
             print(Fore.RED + "  [ERROR] Could not load NSE instruments. Aborting scan.")
             return []
@@ -153,7 +179,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     skipped     = 0
 
     # Single query to load ALL cached dates at once (replaces ~1800 per-symbol queries)
-    ohlcv_date_map = get_ohlcv_date_map()  # {symbol: latest_date_str}
+    ohlcv_date_map = get_bhavcopy_date_map() if _using_bhavcopy() else get_ohlcv_date_map()
 
     for i, symbol in enumerate(universe, 1):
         if symbol in open_pos:
@@ -164,14 +190,16 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
         cached = ohlcv_date_map.get(symbol)   # O(1) dict lookup, no DB call
         if not force_refresh and cached and cached >= target_date:
-            df = load_ohlcv(symbol)
+            df = load_bhavcopy_ohlcv(symbol) if _using_bhavcopy() else load_ohlcv(symbol)
             cached_hits += 1
         else:
-            df = fetch_historical(symbol, scan_date=scan_date)
-            if not df.empty:
+            df = fetch_bhavcopy_historical(symbol, scan_date=target_date) if _using_bhavcopy() else fetch_upstox_historical(symbol, scan_date=scan_date)
+            if not df.empty and not _using_bhavcopy():
                 save_ohlcv(symbol, df)
                 # Keep date map fresh so a later occurrence of the same symbol is correct
                 ohlcv_date_map[symbol] = df["date"].iloc[-1] if hasattr(df["date"].iloc[-1], '__str__') else str(df["date"].iloc[-1])
+                downloaded += 1
+            elif not df.empty:
                 downloaded += 1
 
         if df.empty:

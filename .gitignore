@@ -22,6 +22,9 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# NSE Bhavcopy cache
+data/bhavcopy/
+
 # Generated reports (large, rebuilt on each scan)
 reports/
 

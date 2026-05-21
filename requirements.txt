@@ -1,5 +1,6 @@
 pandas
 pandas-ta
+jugaad-data
 requests
 feedparser
 apscheduler

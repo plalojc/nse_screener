@@ -13,7 +13,12 @@ UPSTOX_HIST_URL = "https://api.upstox.com/v2/historical-candle"
 
 # Database and reports
 DB_PATH = os.getenv("DB_PATH", "nse_agent.db")
+NSE_BHAVCOPY_DB_PATH = os.getenv("NSE_BHAVCOPY_DB_PATH", "nse_bhavcopy.db")
+NSE_BHAVCOPY_DIR = os.getenv("NSE_BHAVCOPY_DIR", "data/bhavcopy")
 REPORT_DIR = os.getenv("REPORT_DIR", "reports")
+
+# Data source: "upstox" or "nse_bhavcopy".
+DATA_SOURCE = os.getenv("DATA_SOURCE", "upstox").lower()
 
 # Screener settings
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "365"))
