@@ -3,12 +3,21 @@
 # main.py – Entry point (manual or scheduled run)
 # ============================================================
 import argparse
+import sys
 from data.database        import init_db
 from agent.screener_agent import run_daily_scan
 from agent.portfolio_tracker import print_portfolio
 
 
+def _configure_console_encoding():
+    """Avoid Windows cp1252 crashes when printing report symbols."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main():
+    _configure_console_encoding()
     parser = argparse.ArgumentParser(description="NSE Breakout Agent")
     parser.add_argument("command", nargs="?", default="scan",
                         choices=["scan", "portfolio", "schedule", "log", "backtest", "auth", "clear-log"],
@@ -177,4 +186,3 @@ def _clear_breakout_log(scan_date: str | None):
 
 if __name__ == "__main__":
     main()
-

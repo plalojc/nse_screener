@@ -1,6 +1,6 @@
-
+﻿
 # ============================================================
-# data/database.py – SQLite layer
+# data/database.py â€“ SQLite layer
 # ============================================================
 import sqlite3
 import pandas as pd
@@ -18,7 +18,7 @@ def init_db():
     conn = get_conn()
     cur  = conn.cursor()
 
-    # ── instruments: master symbol reference table ────────────────────────────
+    # â”€â”€ instruments: master symbol reference table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     cur.execute("""
         CREATE TABLE IF NOT EXISTS instruments (
             symbol          TEXT PRIMARY KEY,
@@ -27,7 +27,7 @@ def init_db():
         )
     """)
 
-    # ── ohlcv: price data only; symbol FK → instruments ─────────────────────
+    # â”€â”€ ohlcv: price data only; symbol FK â†’ instruments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ohlcv (
             symbol  TEXT REFERENCES instruments(symbol),
@@ -88,26 +88,6 @@ def init_db():
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS marketaux_cache (
-            symbol        TEXT    NOT NULL,
-            scan_date     TEXT    NOT NULL,
-            response_json TEXT,
-            fetched_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(symbol, scan_date)
-        )
-    """)
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS gemini_sentiment_cache (
-            symbol        TEXT    NOT NULL,
-            scan_date     TEXT    NOT NULL,
-            response_json TEXT,
-            fetched_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(symbol, scan_date)
-        )
-    """)
-
-    cur.execute("""
         CREATE TABLE IF NOT EXISTS breakout_log (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_date       TEXT    NOT NULL,
@@ -130,42 +110,16 @@ def init_db():
             UNIQUE(scan_date, symbol)       -- one entry per symbol per day
         )
     """)
-    # Migrations for existing DBs (original + multi-LLM panel columns)
+    # Migrations for existing DBs.
     for col, typedef in [
-        # Original migrations
         ("swing_low",          "REAL"),
         ("llm_verdict",        "TEXT"),
         ("llm_confidence",     "INTEGER"),
         ("llm_reasoning",      "TEXT"),
-        # Multi-LLM panel: per-agent verdicts
-        ("tech_verdict",       "TEXT"),
-        ("tech_confidence",    "INTEGER"),
-        ("tech_reasoning",     "TEXT"),
-        ("sent_verdict",       "TEXT"),
-        ("sent_confidence",    "INTEGER"),
-        ("sent_reasoning",     "TEXT"),
-        ("risk_verdict",       "TEXT"),
-        ("risk_confidence",    "INTEGER"),
-        ("risk_reasoning",     "TEXT"),
-        # Debate fields
-        ("debate_triggered",   "INTEGER"),
-        ("debate_winner",      "TEXT"),
-        ("debate_reasoning",   "TEXT"),
-        # Meta
         ("panel_method",       "TEXT"),
-        ("weighted_score",     "REAL"),
-        # Advanced pattern detection
         ("vcp_detected",       "INTEGER"),
         ("bull_flag_detected", "INTEGER"),
         ("pattern_score",      "INTEGER"),
-        # Live validation (Claude + Web Search)
-        ("live_verdict",       "TEXT"),
-        ("live_confidence",    "INTEGER"),
-        ("live_reasoning",     "TEXT"),
-        # Gemini sentiment validation (Gemini 2.5 Flash + Google Search)
-        ("gemini_verdict",     "TEXT"),
-        ("gemini_confidence",  "INTEGER"),
-        ("gemini_reasoning",   "TEXT"),
     ]:
         try:
             cur.execute(f"ALTER TABLE breakout_log ADD COLUMN {col} {typedef}")
@@ -178,7 +132,7 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
-    # ── invalid_instruments: persistent blacklist of ETFs & no-data symbols ────
+    # â”€â”€ invalid_instruments: persistent blacklist of ETFs & no-data symbols â”€â”€â”€â”€
     cur.execute("""
         CREATE TABLE IF NOT EXISTS invalid_instruments (
             symbol   TEXT PRIMARY KEY,
@@ -357,7 +311,7 @@ def reset_positions():
 
 def update_trailing_stop(symbol: str, new_trail: float):
     """
-    Ratchet the trailing stop UP only — never move it down.
+    Ratchet the trailing stop UP only â€” never move it down.
     Uses a single SQL conditional update to avoid a race condition.
     """
     conn = get_conn()
@@ -391,7 +345,7 @@ def close_position(symbol, exit_price, pnl_pct):
     conn.close()
 
 
-# ── Breakout Log ──────────────────────────────────────────────────────────────
+# â”€â”€ Breakout Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_llm_verdict_cache(scan_date: str) -> dict:
     """
@@ -423,41 +377,28 @@ def get_llm_verdict_cache(scan_date: str) -> dict:
 
 
 def save_breakout_log(scan_date: str, sig: dict):
-    """
-    Insert or replace a breakout signal row in breakout_log.
-    IMPORTANT: Never overwrites an existing real LLM verdict with SKIPPED —
-    preserves validated verdicts across re-runs on the same day.
-    Now also stores multi-LLM panel fields (per-agent verdicts, debate, patterns).
-    """
+    """Insert or update a Gemini-validated breakout signal row."""
     conn = get_conn()
     conn.execute("""
         INSERT INTO breakout_log
             (scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
              stage, ema20, ema50, atr14, swing_low, reasons,
              llm_verdict, llm_confidence, llm_reasoning,
-             tech_verdict, tech_confidence, tech_reasoning,
-             sent_verdict, sent_confidence, sent_reasoning,
-             risk_verdict, risk_confidence, risk_reasoning,
-             debate_triggered, debate_winner, debate_reasoning,
-             panel_method, weighted_score,
-             vcp_detected, bull_flag_detected, pattern_score,
-             live_verdict, live_confidence, live_reasoning,
-             gemini_verdict, gemini_confidence, gemini_reasoning)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             panel_method, vcp_detected, bull_flag_detected, pattern_score)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(scan_date, symbol) DO UPDATE SET
-            signal_type      = excluded.signal_type,
-            close            = excluded.close,
-            rsi              = excluded.rsi,
-            vol_ratio        = excluded.vol_ratio,
-            score            = excluded.score,
-            stage            = excluded.stage,
-            ema20            = excluded.ema20,
-            ema50            = excluded.ema50,
-            atr14            = excluded.atr14,
-            swing_low        = excluded.swing_low,
-            reasons          = excluded.reasons,
-            -- Only update LLM fields if the new value is a real verdict
-            llm_verdict    = CASE
+            signal_type = excluded.signal_type,
+            close       = excluded.close,
+            rsi         = excluded.rsi,
+            vol_ratio   = excluded.vol_ratio,
+            score       = excluded.score,
+            stage       = excluded.stage,
+            ema20       = excluded.ema20,
+            ema50       = excluded.ema50,
+            atr14       = excluded.atr14,
+            swing_low   = excluded.swing_low,
+            reasons     = excluded.reasons,
+            llm_verdict = CASE
                 WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_verdict
                 WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_verdict
                 ELSE llm_verdict
@@ -467,37 +408,15 @@ def save_breakout_log(scan_date: str, sig: dict):
                 WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_confidence
                 ELSE llm_confidence
             END,
-            llm_reasoning  = CASE
+            llm_reasoning = CASE
                 WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_reasoning
                 WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_reasoning
                 ELSE llm_reasoning
             END,
-            -- Panel agent fields: update whenever a real verdict arrives
-            tech_verdict     = COALESCE(excluded.tech_verdict,     tech_verdict),
-            tech_confidence  = COALESCE(excluded.tech_confidence,  tech_confidence),
-            tech_reasoning   = COALESCE(excluded.tech_reasoning,   tech_reasoning),
-            sent_verdict     = COALESCE(excluded.sent_verdict,     sent_verdict),
-            sent_confidence  = COALESCE(excluded.sent_confidence,  sent_confidence),
-            sent_reasoning   = COALESCE(excluded.sent_reasoning,   sent_reasoning),
-            risk_verdict     = COALESCE(excluded.risk_verdict,     risk_verdict),
-            risk_confidence  = COALESCE(excluded.risk_confidence,  risk_confidence),
-            risk_reasoning   = COALESCE(excluded.risk_reasoning,   risk_reasoning),
-            debate_triggered = COALESCE(excluded.debate_triggered, debate_triggered),
-            debate_winner    = COALESCE(excluded.debate_winner,    debate_winner),
-            debate_reasoning = COALESCE(excluded.debate_reasoning, debate_reasoning),
-            panel_method     = COALESCE(excluded.panel_method,     panel_method),
-            weighted_score   = COALESCE(excluded.weighted_score,   weighted_score),
-            vcp_detected     = COALESCE(excluded.vcp_detected,     vcp_detected),
+            panel_method       = COALESCE(excluded.panel_method, panel_method),
+            vcp_detected       = COALESCE(excluded.vcp_detected, vcp_detected),
             bull_flag_detected = COALESCE(excluded.bull_flag_detected, bull_flag_detected),
-            pattern_score    = COALESCE(excluded.pattern_score,    pattern_score),
-            -- Live validation: update whenever a real verdict arrives
-            live_verdict     = COALESCE(excluded.live_verdict,     live_verdict),
-            live_confidence  = COALESCE(excluded.live_confidence,  live_confidence),
-            live_reasoning   = COALESCE(excluded.live_reasoning,   live_reasoning),
-            -- Gemini sentiment validation: update whenever a real verdict arrives
-            gemini_verdict   = COALESCE(excluded.gemini_verdict,   gemini_verdict),
-            gemini_confidence = COALESCE(excluded.gemini_confidence, gemini_confidence),
-            gemini_reasoning = COALESCE(excluded.gemini_reasoning, gemini_reasoning)
+            pattern_score      = COALESCE(excluded.pattern_score, pattern_score)
     """, (
         scan_date,
         sig.get("symbol"),
@@ -515,100 +434,18 @@ def save_breakout_log(scan_date: str, sig: dict):
         sig.get("llm_verdict", "SKIPPED"),
         sig.get("llm_confidence"),
         sig.get("llm_reasoning"),
-        # Panel agent fields
-        sig.get("tech_verdict"),
-        sig.get("tech_confidence"),
-        sig.get("tech_reasoning"),
-        sig.get("sent_verdict"),
-        sig.get("sent_confidence"),
-        sig.get("sent_reasoning"),
-        sig.get("risk_verdict"),
-        sig.get("risk_confidence"),
-        sig.get("risk_reasoning"),
-        sig.get("debate_triggered"),
-        sig.get("debate_winner"),
-        sig.get("debate_reasoning"),
-        sig.get("panel_method"),
-        sig.get("weighted_score"),
+        sig.get("panel_method", "GEMINI_DIRECT"),
         sig.get("vcp_detected"),
         sig.get("bull_flag_detected"),
         sig.get("pattern_score"),
-        # Live validation fields
-        sig.get("live_verdict"),
-        sig.get("live_confidence"),
-        sig.get("live_reasoning"),
-        # Gemini sentiment validation fields
-        sig.get("gemini_verdict"),
-        sig.get("gemini_confidence"),
-        sig.get("gemini_reasoning"),
     ))
     conn.commit()
     conn.close()
 
-
-def get_panel_verdict_cache(scan_date: str) -> dict:
-    """
-    Return already-validated multi-LLM panel verdicts for today.
-    Includes all per-agent fields so the caller can restore the full PanelVerdict.
-    Only returns rows with a real verdict (not SKIPPED/NULL) from MULTI_LLM or SINGLE_LLM runs.
-    """
-    conn = get_conn()
-    rows = conn.execute(
-        """
-        SELECT symbol, llm_verdict, llm_confidence, llm_reasoning,
-               tech_verdict, tech_confidence, tech_reasoning,
-               sent_verdict, sent_confidence, sent_reasoning,
-               risk_verdict, risk_confidence, risk_reasoning,
-               debate_triggered, debate_winner, debate_reasoning,
-               panel_method, weighted_score,
-               vcp_detected, bull_flag_detected, pattern_score,
-               live_verdict, live_confidence, live_reasoning,
-               gemini_verdict, gemini_confidence, gemini_reasoning
-        FROM   breakout_log
-        WHERE  scan_date = ?
-          AND  llm_verdict NOT IN ('SKIPPED', '')
-          AND  llm_verdict IS NOT NULL
-        """,
-        (scan_date,)
-    ).fetchall()
-    conn.close()
-    return {
-        r["symbol"]: {
-            "llm_verdict":      r["llm_verdict"],
-            "llm_confidence":   r["llm_confidence"],
-            "llm_reasoning":    r["llm_reasoning"],
-            "tech_verdict":     r["tech_verdict"],
-            "tech_confidence":  r["tech_confidence"],
-            "tech_reasoning":   r["tech_reasoning"],
-            "sent_verdict":     r["sent_verdict"],
-            "sent_confidence":  r["sent_confidence"],
-            "sent_reasoning":   r["sent_reasoning"],
-            "risk_verdict":     r["risk_verdict"],
-            "risk_confidence":  r["risk_confidence"],
-            "risk_reasoning":   r["risk_reasoning"],
-            "debate_triggered": r["debate_triggered"],
-            "debate_winner":    r["debate_winner"],
-            "debate_reasoning": r["debate_reasoning"],
-            "panel_method":     r["panel_method"],
-            "weighted_score":   r["weighted_score"],
-            "vcp_detected":     r["vcp_detected"],
-            "bull_flag_detected": r["bull_flag_detected"],
-            "pattern_score":    r["pattern_score"],
-            "live_verdict":     r["live_verdict"],
-            "live_confidence":  r["live_confidence"],
-            "live_reasoning":   r["live_reasoning"],
-            "gemini_verdict":   r["gemini_verdict"],
-            "gemini_confidence": r["gemini_confidence"],
-            "gemini_reasoning": r["gemini_reasoning"],
-        }
-        for r in rows
-    }
-
-
-# ── Invalid Instruments Blacklist ─────────────────────────────────────────────
+# â”€â”€ Invalid Instruments Blacklist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def add_invalid_instrument(symbol: str, reason: str, source: str) -> None:
-    """Add a single symbol to the blacklist (INSERT OR IGNORE – safe to call repeatedly)."""
+    """Add a single symbol to the blacklist (INSERT OR IGNORE â€“ safe to call repeatedly)."""
     conn = get_conn()
     conn.execute(
         "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source) VALUES (?, ?, ?)",
@@ -621,7 +458,7 @@ def add_invalid_instrument(symbol: str, reason: str, source: str) -> None:
 def bulk_add_invalid_instruments(rows: list) -> int:
     """Bulk-insert symbols into the blacklist.
     Each element must be a dict with keys: symbol, reason, source.
-    Uses INSERT OR IGNORE — safe to re-run every scan (duplicates are skipped).
+    Uses INSERT OR IGNORE â€” safe to re-run every scan (duplicates are skipped).
     Returns the number of newly inserted rows."""
     if not rows:
         return 0
@@ -674,3 +511,4 @@ def delete_breakout_log(scan_date: str) -> int:
     conn.commit()
     conn.close()
     return deleted
+

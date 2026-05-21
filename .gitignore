@@ -36,6 +36,9 @@ instruments_cache/
 .DS_Store
 Thumbs.db
 
+# Windows reserved-name junk file that cannot be indexed normally
+/nul
+
 # IDEs
 .vscode/
 .idea/
