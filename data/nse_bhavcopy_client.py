@@ -72,7 +72,8 @@ def _is_cached(conn, d: date) -> bool:
         "SELECT status FROM bhavcopy_files WHERE date=?",
         (d.isoformat(),),
     ).fetchone()
-    return bool(row and row["status"] == "OK")
+    # Accept both OK and FAILED as 'already processed' to prevent infinite holiday loops
+    return bool(row and row["status"] in ("OK", "FAILED"))
 
 
 def _record_status(conn, d: date, status: str, file_path: str = "", message: str = ""):
@@ -134,7 +135,7 @@ def _download_and_store(d: date) -> int:
         conn.close()
 
 
-def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOOKBACK_DAYS) -> str | None:
+def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOOKBACK_DAYS, force_refresh: bool = False) -> str | None:
     """
     Download missing NSE Bhavcopy files into the separate Bhavcopy DB.
     Returns the latest cached trading date available at or before scan_date.
@@ -144,7 +145,11 @@ def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOO
     start = target - timedelta(days=lookback_days)
 
     conn = _get_conn()
-    missing = [d for d in _weekdays_between(start, target) if not _is_cached(conn, d)]
+    # MODIFIED: If force_refresh is True and d is our target date, treat it as missing
+    missing = [
+        d for d in _weekdays_between(start, target) 
+        if (force_refresh and d == target) or not _is_cached(conn, d)
+    ]
     conn.close()
 
     if missing:
@@ -152,7 +157,7 @@ def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOO
     for idx, d in enumerate(missing, 1):
         rows = _download_and_store(d)
         status = f"{rows} EQ rows" if rows else "not available"
-        print(f"  [Bhavcopy {idx:>3}/{len(missing)}] {d.isoformat()} -> {status}")
+        print(f"   [Bhavcopy {idx:>3}/{len(missing)}] {d.isoformat()} -> {status}")
 
     return latest_cached_date(target.isoformat())
 

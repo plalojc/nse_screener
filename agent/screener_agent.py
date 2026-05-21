@@ -69,23 +69,30 @@ def _ensure_instruments(symbols: list):
 def _effective_scan_date(scan_date: str = None) -> str:
     """
     Return the effective 'to_date' for data fetching as 'YYYY-MM-DD'.
-    If scan_date is given, snap it to the nearest past weekday.
-    Otherwise use the most recent weekday before today.
+    Automatically switches to today's date if run post-market (after 5 PM IST).
     """
     if scan_date:
         d = datetime.strptime(scan_date, "%Y-%m-%d").date()
     else:
-        d = date.today() - timedelta(days=1)
+        # Check current hour. If it's 5 PM (17:00) or later, look for today's file.
+        # Otherwise, default to yesterday.
+        now = datetime.now() 
+        if now.hour >= 17:
+            d = date.today()
+        else:
+            d = date.today() - timedelta(days=1)
+            
     while d.weekday() >= 5:          # skip Sat(5) / Sun(6)
         d -= timedelta(days=1)
+        
     return d.strftime("%Y-%m-%d")
 
 
 def _get_ohlcv(symbol: str, target_date: str, scan_date: str = None) -> pd.DataFrame:
     """
     Return OHLCV for a symbol.
-    â‘  If SQLite already has data up to target_date â†’ load from cache (no API call).
-    â‘¡ Otherwise download from Upstox, persist to SQLite, and return.
+    If SQLite already has data up to target_date â†’ load from cache (no API call).
+    Otherwise download from Upstox, persist to SQLite, and return.
     """
     cached = ohlcv_latest_date(symbol)
     if cached and cached >= target_date:
@@ -98,7 +105,7 @@ def _get_ohlcv(symbol: str, target_date: str, scan_date: str = None) -> pd.DataF
     return df
 
 
-# â”€â”€ main scan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# -----------------------------------------------------------
 
 def run_daily_scan(symbols: list = None, scan_date: str = None,
                    force_refresh: bool = False) -> list:
@@ -125,14 +132,15 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     init_db()
 
     if _using_bhavcopy():
-        latest = update_bhavcopy_cache(scan_date=target_date)
+        # MODIFIED: Pass the force_refresh parameter here
+        latest = update_bhavcopy_cache(scan_date=target_date, force_refresh=force_refresh)
         if not latest:
-            print(Fore.RED + "  [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
+            print(Fore.RED + "   [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
             return []
         target_date = latest
         print(Fore.CYAN + f"   Bhavcopy  : using cached trading date {target_date}")
 
-    # â”€â”€ Step 1 â€“ Exit check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # 
     print(Fore.YELLOW + "\n[1/5] Checking exit conditions...")
     exits = check_exit_signals()
     if exits:
@@ -142,12 +150,12 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     else:
         print("  No exits triggered.")
 
-    # â”€â”€ Step 2 â€“ News â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # 
     print(Fore.YELLOW + "\n[2/5] Fetching market news...")
     n = fetch_and_store_news()
     print(f"  {n} new articles cached.")
 
-    # â”€â”€ Step 3 â€“ Build universe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # 
     # Load blacklist once here â€” used to pre-filter the universe before the loop
     invalid_symbols = get_invalid_symbols()
 
@@ -170,7 +178,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         print(f"  Universe: {len(universe)} NSE EQ instruments "
               f"({raw_count - len(universe)} blacklisted removed).")
 
-    # â”€â”€ Step 3 â€“ Scan universe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -------------------------------------------------- Step 3 – Scan universe --------------------------------------------------
     signals     = []
     open_pos    = {p["symbol"] for p in get_open_positions()}
     total       = len(universe)
