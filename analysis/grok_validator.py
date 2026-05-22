@@ -55,7 +55,13 @@ def _build_payload(batch: list[dict]) -> list[dict]:
             "rsi": _safe_round(sig.get("rsi")),
             "vol_ratio": _safe_round(sig.get("vol_ratio")),
             "score": sig.get("score"),
+            "swing_score": sig.get("swing_score"),
             "stage": sig.get("stage"),
+            "breakout_lookback": sig.get("breakout_lookback"),
+            "turnover_cr": _safe_round(sig.get("turnover_cr")),
+            "entry_risk_pct": _safe_round(sig.get("entry_risk_pct")),
+            "ema20_extension_pct": _safe_round(sig.get("ema20_extension_pct")),
+            "close_range_pos": _safe_round(sig.get("close_range_pos")),
             "ema20": _safe_round(sig.get("ema20")),
             "ema50": _safe_round(sig.get("ema50")),
             "ema200": _safe_round(sig.get("ema200")),
@@ -85,9 +91,11 @@ INPUT DATA:
 For EACH stock, evaluate these dimensions:
 1. Technical quality:
    - Stage2 is preferred; reject/penalize Stage3 parabolic moves.
+   - Prior 55-day breakouts are preferred over weaker 20-day breakouts for a 2-4 week swing.
    - Healthy RSI is usually 55-75. RSI above 80 is overextended.
    - Volume confirmation is strong above 1.8x and weak below 1.5x.
-   - Price should not be too extended above EMA20/EMA50.
+   - Price should not be too extended above EMA20/EMA50; entries >10% above EMA20 are risky.
+   - Entry risk near/under 6% is preferred; wide stops make a 2R target harder within 2-4 weeks.
    - Above EMA200 is a positive macro-trend filter.
 2. Catalyst:
    - Search web and X for last 7 days: earnings/results, order wins, contracts,

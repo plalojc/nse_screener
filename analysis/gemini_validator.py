@@ -113,6 +113,12 @@ TREND & INDICATORS
   {ema200_line}
   RSI (14)   : {sig.get('rsi') or 'N/A'}  (scanner range: 55-80; overbought >80)
   Vol Ratio  : {sig.get('vol_ratio') or 'N/A'}x 20-day avg  (high conviction >=1.8x)
+  Turnover   : Rs.{sig.get('turnover_cr') or 'N/A'} Cr
+  SwingScore : {sig.get('swing_score') or sig.get('score', 0)}
+  Breakout   : {sig.get('breakout_lookback') or 'N/A'}-day high
+  Entry Risk : {sig.get('entry_risk_pct') or 'N/A'}%
+  EMA20 Ext  : {sig.get('ema20_extension_pct') or 'N/A'}%
+  Close Pos  : {sig.get('close_range_pos') or 'N/A'} of daily range
   ATR14      : Rs.{atr14 or 'N/A'}
   MACD Hist  : {macd_desc}
   Supertrend : {st_desc}
@@ -157,8 +163,9 @@ Return ONLY a JSON object (no markdown, no prose):
 }}
 
 VERDICT RULES:
-  CONFIRM - Score >= 10, vol >= 1.8x, RSI 55-79, Stage2, AND no major negative news.
-            Neutral news is fine; a positive catalyst strengthens conviction further.
+  CONFIRM - SwingScore >= 12, vol >= 1.8x, RSI 55-75, Stage2, manageable entry risk,
+            not overextended above EMA20, AND no major negative news.
+            Prefer fresh 55-day highs for 2-4 week follow-through.
   WEAK    - Score 6-9, OR vol < 1.8x, OR RSI borderline (>75), OR no catalyst found,
             OR mixed/conflicting news. Setup exists but lacks full conviction.
   REJECT  - Negative news found (SEBI probe, earnings miss, fraud, rating downgrade,

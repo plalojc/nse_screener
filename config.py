@@ -11,16 +11,32 @@ DB_PATH = os.getenv("DB_PATH", "nse_agent.db")
 NSE_BHAVCOPY_DB_PATH = os.getenv("NSE_BHAVCOPY_DB_PATH", "nse_bhavcopy.db")
 NSE_BHAVCOPY_DIR = os.getenv("NSE_BHAVCOPY_DIR", "data/bhavcopy")
 REPORT_DIR = os.getenv("REPORT_DIR", "reports")
+REPORT_SIGNAL_TYPES = {
+    item.strip().upper()
+    for item in os.getenv("REPORT_SIGNAL_TYPES", "BREAKOUT").split(",")
+    if item.strip()
+}
+REPORT_INCLUDE_WEAK = os.getenv("REPORT_INCLUDE_WEAK", "false").lower() == "true"
+REPORT_INCLUDE_REJECTED = os.getenv("REPORT_INCLUDE_REJECTED", "false").lower() == "true"
+REPORT_INCLUDE_SKIPPED = os.getenv("REPORT_INCLUDE_SKIPPED", "false").lower() == "true"
 
 # Screener settings
+SCAN_SIGNAL_TYPES = {
+    item.strip().upper()
+    for item in os.getenv("SCAN_SIGNAL_TYPES", "BREAKOUT").split(",")
+    if item.strip()
+}
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "365"))
 VOLUME_SURGE_FACTOR = float(os.getenv("VOLUME_SURGE_FACTOR", "1.5"))
 RSI_BREAKOUT_MIN = float(os.getenv("RSI_BREAKOUT_MIN", "55"))
 RSI_OVERBOUGHT = float(os.getenv("RSI_OVERBOUGHT", "80"))
 MIN_PRICE = float(os.getenv("MIN_PRICE", "20"))
 MAX_PRICE = float(os.getenv("MAX_PRICE", "5000"))
-MIN_MARKET_CAP_CR = float(os.getenv("MIN_MARKET_CAP_CR", "500"))
-FILTER_ETFS = os.getenv("FILTER_ETFS", "true").lower() == "true"
+MIN_TURNOVER_CR = float(os.getenv("MIN_TURNOVER_CR", "5"))
+MIN_BREAKOUT_SCORE = int(os.getenv("MIN_BREAKOUT_SCORE", "8"))
+MAX_EMA20_EXTENSION_PCT = float(os.getenv("MAX_EMA20_EXTENSION_PCT", "10"))
+MAX_DAY_RANGE_ATR = float(os.getenv("MAX_DAY_RANGE_ATR", "2.8"))
+MIN_CLOSE_RANGE_POS = float(os.getenv("MIN_CLOSE_RANGE_POS", "0.55"))
 
 # Top picks filter
 TOP_PICKS_COUNT = int(os.getenv("TOP_PICKS_COUNT", "7"))

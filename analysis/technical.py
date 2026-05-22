@@ -19,6 +19,16 @@ def _safe(result, index):
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Add all TA indicators needed for breakout detection."""
+    required = {
+        "ema20", "ema50", "ema200", "rsi", "macd", "macd_hist",
+        "bb_upper", "bb_width", "vol_sma20", "vol_ratio", "turnover_cr",
+        "turnover_sma20_cr", "atr14", "high_20d", "high_55d",
+        "close_range_pos", "day_range_atr", "ema20_extension_pct",
+        "ema50_extension_pct", "high_52w", "low_52w", "supertrend_dir",
+    }
+    if required.issubset(df.columns):
+        return df
+
     df = df.copy()
     df["close"] = pd.to_numeric(df["close"])
     df["volume"] = pd.to_numeric(df["volume"])
@@ -60,12 +70,22 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Volume SMA
     df["vol_sma20"]     = df["volume"].rolling(20).mean()
     df["vol_ratio"]     = df["volume"] / df["vol_sma20"]
+    df["turnover_cr"] = (df["close"] * df["volume"]) / 10_000_000
+    df["turnover_sma20_cr"] = df["turnover_cr"].rolling(20).mean()
 
     # ATR (volatility)
     df["atr14"] = _safe(ta.atr(df["high"], df["low"], df["close"], length=14), df.index)
 
-    # 20-day rolling high of actual intraday highs (price-range breakout reference)
-    df["high_20d"] = df["high"].rolling(20).max()
+    # Prior rolling highs. Use shift(1) so today's candle can actually break out.
+    prior_high = df["high"].shift(1)
+    df["high_20d"] = prior_high.rolling(20).max()
+    df["high_55d"] = prior_high.rolling(55).max()
+
+    day_range = (df["high"] - df["low"]).replace(0, np.nan)
+    df["close_range_pos"] = (df["close"] - df["low"]) / day_range
+    df["day_range_atr"] = (df["high"] - df["low"]) / df["atr14"]
+    df["ema20_extension_pct"] = (df["close"] - df["ema20"]) / df["ema20"] * 100
+    df["ema50_extension_pct"] = (df["close"] - df["ema50"]) / df["ema50"] * 100
 
     # 52-week high/low
     df["high_52w"] = df["high"].rolling(252, min_periods=50).max()

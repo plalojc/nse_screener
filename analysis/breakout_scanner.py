@@ -5,7 +5,10 @@
 import pandas as pd
 from analysis.technical import add_indicators, get_stage
 from config import (VOLUME_SURGE_FACTOR, RSI_BREAKOUT_MIN,
-                    RSI_OVERBOUGHT, MIN_PRICE, MAX_PRICE, ATR_SL_MULTIPLIER)
+                    RSI_OVERBOUGHT, MIN_PRICE, MAX_PRICE, ATR_SL_MULTIPLIER,
+                    MIN_TURNOVER_CR, MIN_BREAKOUT_SCORE,
+                    MAX_EMA20_EXTENSION_PCT, MAX_DAY_RANGE_ATR,
+                    MIN_CLOSE_RANGE_POS)
 
 
 def find_swing_low(df: pd.DataFrame, lookback: int = 20) -> float | None:
@@ -29,65 +32,158 @@ def _sl_from_atr_and_swing(close, atr14, swing_low):
     return max(candidates) if candidates else round(close * 0.95, 2)
 
 
+def passes_breakout_prefilter(df: pd.DataFrame) -> bool:
+    """
+    Cheap raw-candle gate before expensive TA indicators are calculated.
+
+    This only checks conditions that must already be true for is_breakout():
+    enough history, price/liquidity, strong close, and a fresh 20d/55d break.
+    """
+    if len(df) < 60:
+        return False
+
+    last = df.iloc[-1]
+    close = pd.to_numeric(last.get("close"), errors="coerce")
+    high = pd.to_numeric(last.get("high"), errors="coerce")
+    low = pd.to_numeric(last.get("low"), errors="coerce")
+    volume = pd.to_numeric(last.get("volume"), errors="coerce")
+    if any(pd.isna(v) for v in (close, high, low, volume)):
+        return False
+    if not (MIN_PRICE <= close <= MAX_PRICE):
+        return False
+
+    turnover_cr = (close * volume) / 10_000_000
+    if turnover_cr < MIN_TURNOVER_CR:
+        return False
+
+    day_range = high - low
+    if day_range <= 0:
+        return False
+    close_range_pos = (close - low) / day_range
+    if close_range_pos < MIN_CLOSE_RANGE_POS:
+        return False
+
+    prior_high = pd.to_numeric(df["high"].shift(1), errors="coerce")
+    high_20d = prior_high.rolling(20).max().iloc[-1]
+    high_55d = prior_high.rolling(55).max().iloc[-1]
+    return (
+        (not pd.isna(high_55d) and close > high_55d)
+        or (not pd.isna(high_20d) and close > high_20d)
+    )
+
+
 # == Breakout Scanner ==========================================================
 
 def is_breakout(df: pd.DataFrame) -> dict | None:
     """
-    Momentum / breakout signal.
-    Scoring criteria (higher = more conviction):
-      1. 20-day price breakout + 2x volume surge  (+3)  <- upgraded
-         OR plain volume surge 1.5x               (+1)
-      2. RSI in momentum zone [55-75]             (+2)
-      3. Price > EMA20 > EMA50 (trend alignment)  (+2)
-      4. MACD histogram crossover                 (+2/+4 if below zero line)  <- upgraded
-      5. Bollinger Band upper breakout            (+2)
-      6. Near 52-week high (within 3%)            (+3)
-      7. EMA20/50 golden cross (last 5 days)      (+3)
-      8. Supertrend fresh bullish crossover       (+3)  <- NEW
-         OR Supertrend already bullish            (+1)  <- NEW
-      9. Price above EMA200 (macro bull filter)   (+1)  <- NEW (was unused)
-    Minimum score to emit a signal: 6
+    2-4 week swing breakout signal.
+    The goal is not to catch every one-day spike. Prefer fresh breakouts from a
+    Stage2 trend with enough liquidity, strong close, and room for 2R follow-through.
     """
-    if len(df) < 30:
+    if len(df) < 60:
         return None
 
     df    = add_indicators(df)
     last  = df.iloc[-1]
     prev  = df.iloc[-2]
     close = last["close"]
+    stage = get_stage(df)
 
     # Basic filters
     if not (MIN_PRICE <= close <= MAX_PRICE):
         return None
-    required = ["ema20", "ema50", "rsi", "vol_ratio"]
+    required = [
+        "ema20", "ema50", "rsi", "vol_ratio", "atr14", "high_20d",
+        "turnover_cr", "close_range_pos", "day_range_atr",
+        "ema20_extension_pct",
+    ]
     if any(pd.isna(last.get(col)) for col in required):
+        return None
+    if stage == "Stage3":
         return None
 
     reasons = []
     score   = 0
     rsi     = last["rsi"]
+    vol_ratio = float(last["vol_ratio"])
+    atr14 = float(last["atr14"])
+    turnover_cr = float(last["turnover_cr"])
+    close_range_pos = float(last["close_range_pos"])
+    day_range_atr = float(last["day_range_atr"])
+    ema20_extension_pct = float(last["ema20_extension_pct"])
+    ema50_extension_pct = float(last.get("ema50_extension_pct") or 0)
 
-    # 1. Volume breakout - 20-day high + 1.8x volume = high conviction (+3)
-    #    Plain surge 1.5-1.79x = baseline (+1)
+    if turnover_cr < MIN_TURNOVER_CR:
+        return None
+    if close_range_pos < MIN_CLOSE_RANGE_POS:
+        return None
+    if day_range_atr > MAX_DAY_RANGE_ATR:
+        return None
+    if ema20_extension_pct > MAX_EMA20_EXTENSION_PCT:
+        return None
+
+    # 1. Fresh price breakout. 55-day highs tend to work better for 2-4 week swings.
     high_20d = last.get("high_20d")
-    if high_20d and not pd.isna(high_20d) and close > high_20d and last["vol_ratio"] >= 1.8:
+    high_55d = last.get("high_55d")
+    has_price_breakout = False
+    breakout_lookback = None
+    if high_55d and not pd.isna(high_55d) and close > high_55d:
+        has_price_breakout = True
+        breakout_lookback = 55
+        score += 5
+        reasons.append("Fresh 55d breakout")
+    elif high_20d and not pd.isna(high_20d) and close > high_20d:
+        has_price_breakout = True
+        breakout_lookback = 20
         score += 3
-        reasons.append(f"20d price breakout + vol {last['vol_ratio']:.1f}x")
-    elif last["vol_ratio"] >= VOLUME_SURGE_FACTOR:
+        reasons.append("Fresh 20d breakout")
+    if not has_price_breakout:
+        return None
+
+    # 2. Volume expansion. Penalize likely exhaustion spikes.
+    if 1.8 <= vol_ratio <= 5.0:
+        score += 3
+        reasons.append(f"Healthy volume expansion {vol_ratio:.1f}x")
+    elif VOLUME_SURGE_FACTOR <= vol_ratio < 1.8:
         score += 1
-        reasons.append(f"Volume surge {last['vol_ratio']:.1f}x avg")
+        reasons.append(f"Volume surge {vol_ratio:.1f}x avg")
+    elif vol_ratio > 5.0:
+        score += 1
+        reasons.append(f"Very high volume {vol_ratio:.1f}x; watch exhaustion")
 
-    # 2. RSI momentum (not overbought)
-    if RSI_BREAKOUT_MIN <= rsi <= RSI_OVERBOUGHT:
-        score += 2
-        reasons.append(f"RSI={rsi:.1f} momentum zone")
+    # 3. RSI momentum (not overbought)
+    if RSI_BREAKOUT_MIN <= rsi <= min(RSI_OVERBOUGHT, 75):
+        score += 3
+        reasons.append(f"RSI={rsi:.1f} clean momentum")
+    elif 75 < rsi <= RSI_OVERBOUGHT:
+        score += 1
+        reasons.append(f"RSI={rsi:.1f} extended but valid")
 
-    # 3. EMA trend alignment
+    # 4. Trend alignment
     if close > last["ema20"] > last["ema50"]:
         score += 2
         reasons.append("EMA20 > EMA50 bull alignment")
+    if stage == "Stage2":
+        score += 2
+        reasons.append("Stage2 trend")
 
-    # 4. MACD crossover - upgraded: bonus when crossover is below zero line
+    ema200 = last.get("ema200")
+    if ema200 is not None and not pd.isna(ema200) and close > ema200:
+        score += 2
+        reasons.append("Above EMA200 macro trend")
+
+    # 5. Entry quality for 2-4 week holding period.
+    if close_range_pos >= 0.7:
+        score += 2
+        reasons.append("Strong close near high")
+    if ema20_extension_pct <= 6:
+        score += 2
+        reasons.append(f"Not extended from EMA20 ({ema20_extension_pct:.1f}%)")
+    elif ema20_extension_pct <= MAX_EMA20_EXTENSION_PCT:
+        score += 1
+        reasons.append(f"Acceptable EMA20 extension ({ema20_extension_pct:.1f}%)")
+
+    # 6. MACD crossover
     macd_hist_now  = last.get("macd_hist", 0) or 0
     macd_hist_prev = prev.get("macd_hist", 1) or 1
     macd_val       = last.get("macd", 0)      or 0
@@ -99,60 +195,62 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
             score += 2
             reasons.append("MACD bullish crossover")
 
-    # 5. Bollinger Band upper breakout
+    # 7. Bollinger Band upper breakout
     bb_upper = last.get("bb_upper")
     if bb_upper and not pd.isna(bb_upper) and close >= bb_upper:
-        score += 2
+        score += 1
         reasons.append("BB upper band breakout")
 
-    # 6. Near 52-week high (within 3%)
+    # 8. Near 52-week high (within 5%)
     high_52w = last.get("high_52w")
-    if high_52w and not pd.isna(high_52w) and close >= 0.97 * high_52w:
-        score += 3
+    if high_52w and not pd.isna(high_52w) and close >= 0.95 * high_52w:
+        score += 2
         reasons.append(f"Near 52W high Rs.{high_52w:.2f}")
 
-    # 7. EMA20/50 golden cross in last 5 days
-    recent     = df.tail(5)
+    # 9. EMA20/50 golden cross in last 10 days
+    recent     = df.tail(10)
     crossovers = (
         (recent["ema20"] > recent["ema50"]) &
         (recent["ema20"].shift(1) <= recent["ema50"].shift(1))
     )
     if crossovers.any():
-        score += 3
+        score += 2
         reasons.append("EMA20/50 golden cross")
 
-    # 8. Supertrend fresh bullish crossover (NEW)
+    # 10. Supertrend confirmation
     s_dir_now  = last.get("supertrend_dir")
     s_dir_prev = prev.get("supertrend_dir")
     if s_dir_now is not None and not pd.isna(s_dir_now):
         if s_dir_now == 1 and s_dir_prev == -1:   # fresh flip to bullish
-            score += 3
+            score += 2
             reasons.append("Supertrend bullish crossover")
         elif s_dir_now == 1:                        # already bullish confirmation
             score += 1
             reasons.append("Supertrend bullish")
 
-    # 9. Price above EMA200 - macro bull filter (NEW, was computed but unused)
-    ema200 = last.get("ema200")
-    if ema200 is not None and not pd.isna(ema200) and close > ema200:
+    swing_low = find_swing_low(df)
+    sl = _sl_from_atr_and_swing(close, atr14, swing_low)
+    entry_risk_pct = (close - sl) / close * 100 if close > sl else 99
+    if entry_risk_pct <= 6:
+        score += 2
+        reasons.append(f"Manageable risk {entry_risk_pct:.1f}%")
+    elif entry_risk_pct <= 8:
         score += 1
-        reasons.append("Above EMA200 (macro uptrend)")
-
-    if score < 6:
+        reasons.append(f"Wide but acceptable risk {entry_risk_pct:.1f}%")
+    else:
         return None
 
-    stage     = get_stage(df)
-    atr14     = last.get("atr14")
-    swing_low = find_swing_low(df)
-    high_52w  = last.get("high_52w")
+    if score < MIN_BREAKOUT_SCORE:
+        return None
 
     return {
         "signal_type": "BREAKOUT",
         "symbol":      df["symbol"].iloc[0] if "symbol" in df.columns else "?",
         "close":       round(close, 2),
         "rsi":         round(rsi, 1),
-        "vol_ratio":   round(last["vol_ratio"], 2),
+        "vol_ratio":   round(vol_ratio, 2),
         "score":       score,
+        "swing_score": score,
         "stage":       stage,
         "reasons":     "; ".join(reasons),
         "ema20":          round(last["ema20"], 2),
@@ -165,6 +263,13 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
         "atr14":          round(float(atr14), 2) if atr14 is not None and not pd.isna(atr14) else None,
         "swing_low":      round(swing_low, 2)    if swing_low is not None else None,
         "high_52w":       round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
+        "turnover_cr":    round(float(turnover_cr), 2),
+        "entry_risk_pct": round(float(entry_risk_pct), 2),
+        "ema20_extension_pct": round(float(ema20_extension_pct), 2),
+        "ema50_extension_pct": round(float(ema50_extension_pct), 2),
+        "close_range_pos": round(float(close_range_pos), 2),
+        "day_range_atr": round(float(day_range_atr), 2),
+        "breakout_lookback": breakout_lookback,
     }
 
 

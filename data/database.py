@@ -18,29 +18,6 @@ def init_db():
     conn = get_conn()
     cur  = conn.cursor()
 
-    # == instruments: master symbol reference table ========================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS instruments (
-            symbol          TEXT PRIMARY KEY,
-            instrument_key  TEXT NOT NULL,
-            instrument_name TEXT
-        )
-    """)
-
-    # == ohlcv: price data only; symbol FK -> instruments ==================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS ohlcv (
-            symbol  TEXT REFERENCES instruments(symbol),
-            date    TEXT,
-            open    REAL,
-            high    REAL,
-            low     REAL,
-            close   REAL,
-            volume  INTEGER,
-            PRIMARY KEY (symbol, date)
-        )
-    """)
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS signals (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,6 +105,37 @@ def init_db():
         except sqlite3.OperationalError:
             pass   # column already exists
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS llm_evaluations (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_date      TEXT NOT NULL,
+            symbol         TEXT NOT NULL,
+            panel_method   TEXT NOT NULL,
+            llm_model      TEXT NOT NULL,
+            verdict        TEXT NOT NULL,
+            confidence     INTEGER,
+            reasoning      TEXT,
+            created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(scan_date, symbol, panel_method, llm_model)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_llm_eval_symbol_date
+        ON llm_evaluations(symbol, scan_date)
+    """)
+    cur.execute("""
+        INSERT OR IGNORE INTO llm_evaluations
+            (scan_date, symbol, panel_method, llm_model, verdict, confidence, reasoning)
+        SELECT scan_date, symbol,
+               COALESCE(NULLIF(panel_method, ''), 'LEGACY'),
+               COALESCE(NULLIF(llm_model, ''), 'legacy'),
+               llm_verdict, llm_confidence, llm_reasoning
+        FROM breakout_log
+        WHERE llm_verdict IS NOT NULL
+          AND llm_verdict NOT IN ('', 'SKIPPED')
+    """)
+
     # Migrate news_cache: add body column for richer sentiment analysis
     try:
         cur.execute("ALTER TABLE news_cache ADD COLUMN body TEXT")
@@ -144,133 +152,9 @@ def init_db():
         )
     """)
 
-    # One-time migration: scan existing instruments table for ETF-like names
-    # and seed them into invalid_instruments (covers data saved before this filter existed).
-    _etf_name_kw = ("ETF", "BEES", "INDEX FUND", "FOF")
-    existing = cur.execute(
-        "SELECT symbol, instrument_name FROM instruments"
-    ).fetchall()
-    for row in existing:
-        sym  = row[0] or ""
-        name = (row[1] or "").upper()
-        sym_up = sym.upper()
-        is_etf = (
-            any(kw in name for kw in _etf_name_kw)
-            or sym_up.endswith("ETF")
-            or sym_up.endswith("BEES")
-        )
-        if is_etf:
-            cur.execute(
-                "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source)"
-                " VALUES (?, 'ETF', 'AUTO_ETF')",
-                (sym,),
-            )
-
     conn.commit()
     conn.close()
     print("[DB] Tables initialized.")
-
-
-def save_instruments(df: pd.DataFrame):
-    """
-    Upsert all NSE EQ instruments into the instruments table.
-    *df* must have columns: symbol, instrument_key, name  (from fetch_nse_instruments).
-    """
-    conn = get_conn()
-    cur  = conn.cursor()
-    for _, row in df.iterrows():
-        cur.execute("""
-            INSERT INTO instruments (symbol, instrument_key, instrument_name)
-            VALUES (?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                instrument_key  = excluded.instrument_key,
-                instrument_name = excluded.instrument_name
-        """, (row["symbol"], row["instrument_key"], row.get("name", "")))
-    conn.commit()
-    conn.close()
-
-
-def save_ohlcv(symbol: str, df: pd.DataFrame):
-    """Upsert OHLCV rows for a symbol (delete-then-insert per symbol)."""
-    conn = get_conn()
-    conn.execute("DELETE FROM ohlcv WHERE symbol=?", (symbol,))
-    df = df.copy()
-    df["symbol"] = symbol
-    df[["symbol","date","open","high","low","close","volume"]].to_sql(
-        "ohlcv", conn, if_exists="append", index=False, method="multi"
-    )
-    conn.commit()
-    conn.close()
-
-
-def ohlcv_latest_date(symbol: str):
-    """Return the latest date string cached for a symbol, or None if absent."""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT MAX(date) FROM ohlcv WHERE symbol=?", (symbol,)
-    ).fetchone()
-    conn.close()
-    return row[0] if row and row[0] else None
-
-
-def get_ohlcv_date_map() -> dict:
-    """
-    Return {symbol: latest_date_str} for ALL symbols in the ohlcv table.
-    Single SQL query replaces ~1800 per-symbol ohlcv_latest_date() calls.
-    """
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT symbol, MAX(date) AS max_date FROM ohlcv GROUP BY symbol"
-    ).fetchall()
-    conn.close()
-    return {r["symbol"]: r["max_date"] for r in rows}
-
-
-def load_ohlcv(symbol: str) -> pd.DataFrame:
-    conn = get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM ohlcv WHERE symbol=? ORDER BY date",
-        conn, params=(symbol,)
-    )
-    conn.close()
-    df["date"] = pd.to_datetime(df["date"])
-    return df
-
-
-def load_ohlcv_upto(symbol: str, upto_date: str) -> pd.DataFrame:
-    """Load OHLCV rows for *symbol* with date <= *upto_date* (backtesting: no future leakage)."""
-    conn = get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM ohlcv WHERE symbol=? AND date<=? ORDER BY date",
-        conn, params=(symbol, upto_date)
-    )
-    conn.close()
-    df["date"] = pd.to_datetime(df["date"])
-    return df
-
-
-def load_ohlcv_range(symbol: str, from_date: str, to_date: str) -> pd.DataFrame:
-    """Load OHLCV rows strictly AFTER *from_date* up to and including *to_date*.
-    Used to fetch the forward-looking candles for backtest outcome evaluation.
-    """
-    conn = get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM ohlcv WHERE symbol=? AND date>? AND date<=? ORDER BY date",
-        conn, params=(symbol, from_date, to_date)
-    )
-    conn.close()
-    df["date"] = pd.to_datetime(df["date"])
-    return df
-
-
-def get_symbols_with_data_upto(upto_date: str) -> list:
-    """Return all symbols that have at least one OHLCV row on or before *upto_date*."""
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT symbol FROM ohlcv WHERE date <= ?", (upto_date,)
-    ).fetchall()
-    conn.close()
-    return [r["symbol"] for r in rows]
 
 
 def save_signal(symbol, signal_type, price, reason):
@@ -367,12 +251,11 @@ def get_llm_verdict_cache(
     """
     conn = get_conn()
     sql = """
-        SELECT symbol, llm_verdict, llm_confidence, llm_reasoning,
-               panel_method, llm_model
-        FROM   breakout_log
+        SELECT symbol, verdict, confidence, reasoning, panel_method, llm_model
+        FROM   llm_evaluations
         WHERE  scan_date = ?
-          AND  llm_verdict NOT IN ('SKIPPED', '')
-          AND  llm_verdict IS NOT NULL
+          AND  verdict NOT IN ('SKIPPED', '')
+          AND  verdict IS NOT NULL
     """
     params = [scan_date]
     if panel_method:
@@ -385,9 +268,9 @@ def get_llm_verdict_cache(
     conn.close()
     return {
         r["symbol"]: {
-            "llm_verdict":    r["llm_verdict"],
-            "llm_confidence": r["llm_confidence"],
-            "llm_reasoning":  r["llm_reasoning"],
+            "llm_verdict":    r["verdict"],
+            "llm_confidence": r["confidence"],
+            "llm_reasoning":  r["reasoning"],
             "panel_method":   r["panel_method"],
             "llm_model":      r["llm_model"],
         }
@@ -396,7 +279,7 @@ def get_llm_verdict_cache(
 
 
 def save_breakout_log(scan_date: str, sig: dict):
-    """Insert or update a Gemini-validated breakout signal row."""
+    """Insert/update a signal row and store its LLM evaluation separately."""
     conn = get_conn()
     conn.execute("""
         INSERT INTO breakout_log
@@ -468,6 +351,29 @@ def save_breakout_log(scan_date: str, sig: dict):
         sig.get("bull_flag_detected"),
         sig.get("pattern_score"),
     ))
+    verdict = sig.get("llm_verdict")
+    panel_method = sig.get("panel_method")
+    llm_model = sig.get("llm_model")
+    if verdict and verdict not in ("", "SKIPPED") and panel_method and llm_model:
+        conn.execute("""
+            INSERT INTO llm_evaluations
+                (scan_date, symbol, panel_method, llm_model, verdict,
+                 confidence, reasoning, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(scan_date, symbol, panel_method, llm_model) DO UPDATE SET
+                verdict=excluded.verdict,
+                confidence=excluded.confidence,
+                reasoning=excluded.reasoning,
+                updated_at=excluded.updated_at
+        """, (
+            scan_date,
+            sig.get("symbol"),
+            panel_method,
+            llm_model,
+            verdict,
+            sig.get("llm_confidence"),
+            sig.get("llm_reasoning"),
+        ))
     conn.commit()
     conn.close()
 
@@ -516,12 +422,30 @@ def get_breakout_log(days: int = 30) -> pd.DataFrame:
     conn = get_conn()
     df = pd.read_sql(
         """
-        SELECT scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
-               stage, ema20, ema50, atr14, reasons,
-               llm_verdict, llm_confidence, llm_reasoning, created_at
-        FROM   breakout_log
-        WHERE  scan_date >= date('now', ?)
-        ORDER  BY scan_date DESC, score DESC
+        WITH latest_eval AS (
+            SELECT *
+            FROM llm_evaluations
+            WHERE id IN (
+                SELECT MAX(id)
+                FROM llm_evaluations
+                GROUP BY scan_date, symbol
+            )
+        )
+        SELECT b.scan_date, b.symbol, b.signal_type, b.close, b.rsi,
+               b.vol_ratio, b.score, b.stage, b.ema20, b.ema50, b.atr14,
+               b.reasons,
+               COALESCE(le.verdict, b.llm_verdict) AS llm_verdict,
+               COALESCE(le.confidence, b.llm_confidence) AS llm_confidence,
+               COALESCE(le.reasoning, b.llm_reasoning) AS llm_reasoning,
+               COALESCE(le.panel_method, b.panel_method) AS panel_method,
+               COALESCE(le.llm_model, b.llm_model) AS llm_model,
+               b.created_at
+        FROM   breakout_log b
+        LEFT JOIN latest_eval le
+          ON le.scan_date = b.scan_date
+         AND le.symbol = b.symbol
+        WHERE  b.scan_date >= date('now', ?)
+        ORDER  BY b.scan_date DESC, b.score DESC
         """,
         conn,
         params=(f"-{days} days",),
@@ -533,6 +457,9 @@ def get_breakout_log(days: int = 30) -> pd.DataFrame:
 def delete_breakout_log(scan_date: str) -> int:
     """Delete all breakout_log rows for a specific scan_date. Returns rows deleted."""
     conn = get_conn()
+    conn.execute(
+        "DELETE FROM llm_evaluations WHERE scan_date = ?", (scan_date,)
+    )
     cur = conn.execute(
         "DELETE FROM breakout_log WHERE scan_date = ?", (scan_date,)
     )

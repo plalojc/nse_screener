@@ -222,6 +222,42 @@ def load_ohlcv(symbol: str) -> pd.DataFrame:
     return df
 
 
+def load_ohlcv_bulk(symbols: list[str] | None = None, upto_date: str | None = None) -> dict[str, pd.DataFrame]:
+    """
+    Return cached OHLCV grouped by symbol using one SQLite read.
+
+    The scan loop used to issue one query per symbol. Loading the Bhavcopy
+    window once is much faster for the full NSE universe and keeps all
+    downstream scanner logic unchanged.
+    """
+    init_bhavcopy_db()
+    params: tuple[str, ...] = ()
+    query = "SELECT * FROM bhavcopy_ohlcv"
+    if upto_date:
+        query += " WHERE date<=?"
+        params = (upto_date,)
+    query += " ORDER BY symbol, date"
+
+    conn = _get_conn()
+    df = pd.read_sql(query, conn, params=params)
+    conn.close()
+
+    if df.empty:
+        return {}
+
+    if symbols is not None:
+        symbol_set = set(symbols)
+        df = df[df["symbol"].isin(symbol_set)]
+        if df.empty:
+            return {}
+
+    df["date"] = pd.to_datetime(df["date"])
+    return {
+        symbol: group.reset_index(drop=True)
+        for symbol, group in df.groupby("symbol", sort=False)
+    }
+
+
 def load_ohlcv_upto(symbol: str, upto_date: str) -> pd.DataFrame:
     init_bhavcopy_db()
     conn = _get_conn()

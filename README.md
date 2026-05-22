@@ -77,6 +77,14 @@ Run a scan:
 .\venv\Scripts\python.exe main.py scan
 ```
 
+The scanner defaults to breakout-only mode for speed and focus:
+
+```env
+SCAN_SIGNAL_TYPES=BREAKOUT
+```
+
+Set `SCAN_SIGNAL_TYPES=BREAKOUT,PULLBACK` if you want the older pullback scan included too.
+
 ## NSE Bhavcopy Data
 
 Run:
@@ -86,6 +94,19 @@ Run:
 ```
 
 The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters `SERIES == EQ`, stores OHLCV in `nse_bhavcopy.db`, and runs the breakout logic over that cache.
+
+## Report Filters
+
+HTML reports show recommended breakout stocks by default:
+
+```env
+REPORT_SIGNAL_TYPES=BREAKOUT
+REPORT_INCLUDE_WEAK=false
+REPORT_INCLUDE_REJECTED=false
+REPORT_INCLUDE_SKIPPED=false
+```
+
+Set `REPORT_INCLUDE_WEAK=true` if you want borderline LLM verdicts in the report.
 
 ## Commands
 
@@ -102,15 +123,19 @@ The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters
 
 1. Load NSE EQ instruments from NSE Bhavcopy.
 2. Filter invalid instruments and ETFs.
-3. Load OHLCV from SQLite cache or fetch fresh data.
-4. Detect breakout and pullback setups.
-5. Rank signals locally and validate only the top `LLM_VALIDATION_LIMIT` stocks with the configured LLM validator.
+3. Bulk-load OHLCV from the SQLite Bhavcopy cache.
+4. Cheaply prefilter raw candles before calculating heavier technical indicators.
+5. Detect configured setups, breakout-only by default.
+   - Breakouts must clear a prior 20/55-day high.
+   - Local filters prefer Stage2 trend, healthy volume, liquidity, strong close, and manageable stop distance.
+6. Rank signals locally and validate only the top `LLM_VALIDATION_LIMIT` stocks with the configured LLM validator.
    - Gemini validates per signal with Google Search grounding.
    - Grok validates compact batches through xAI's OpenAI-compatible API.
-6. Save signal history to SQLite.
-7. Print candidates, top picks, portfolio entries, and an HTML report.
+7. Save signal history to SQLite.
+8. Print candidates, top picks, portfolio entries, and an HTML report.
 
 ## Notes
 
 - Gemini and Grok are the supported decision engines.
+- The project intentionally keeps two SQLite files: `nse_agent.db` for app state and `nse_bhavcopy.db` for the larger market-data cache.
 - Generated reports and the SQLite DB are local runtime artifacts and are ignored by Git.

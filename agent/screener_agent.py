@@ -2,26 +2,29 @@
 # ============================================================
 # agent/screener_agent.py - Main orchestrator
 # ============================================================
-import pandas as pd
 from datetime import date, datetime, timedelta
 from tabulate import tabulate
 from colorama import Fore, Style, init
 
 from data.database       import (init_db, save_signal,
                                   open_position, get_open_positions,
-                                  save_breakout_log, save_instruments,
+                                  save_breakout_log,
                                   get_invalid_symbols, add_invalid_instrument)
-from data.nse_bhavcopy_client import fetch_historical as fetch_bhavcopy_historical
 from data.nse_bhavcopy_client import fetch_nse_instruments as fetch_bhavcopy_instruments
-from data.nse_bhavcopy_client import get_ohlcv_date_map as get_bhavcopy_date_map
-from data.nse_bhavcopy_client import load_ohlcv as load_bhavcopy_ohlcv
+from data.nse_bhavcopy_client import load_ohlcv_bulk as load_bhavcopy_ohlcv_bulk
 from data.nse_bhavcopy_client import update_bhavcopy_cache
-from analysis.breakout_scanner import is_breakout, is_ma_pullback
+from analysis.breakout_scanner import (
+    is_breakout,
+    is_ma_pullback,
+    passes_breakout_prefilter,
+)
+from analysis.technical import add_indicators
 from analysis.news_fetcher     import fetch_and_store_news, get_news_for_symbol
 from analysis.gemini_validator import validate_signals_gemini_direct
 from analysis.grok_validator import validate_signals_grok_batch
 from agent.portfolio_tracker   import check_exit_signals
 from config import (LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
+                    SCAN_SIGNAL_TYPES,
                     MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, TOP_PICKS_COUNT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
@@ -40,11 +43,22 @@ def _rank_signal(sig: dict) -> tuple:
     """Built-in ranking before paid/remote LLM validation."""
     stage_bonus = 2 if sig.get("stage") == "Stage2" else 0
     pattern_score = sig.get("pattern_score") or 0
-    score = sig.get("score") or 0
+    score = sig.get("swing_score") or sig.get("score") or 0
     vol_ratio = sig.get("vol_ratio") or 0
     rsi = sig.get("rsi") or 99
     rsi_penalty = abs(65 - rsi)
-    return (score + stage_bonus, pattern_score, vol_ratio, -rsi_penalty)
+    risk = sig.get("entry_risk_pct") or 99
+    extension = sig.get("ema20_extension_pct") or 99
+    turnover = sig.get("turnover_cr") or 0
+    return (
+        score + stage_bonus,
+        pattern_score,
+        -risk,
+        -extension,
+        turnover,
+        vol_ratio,
+        -rsi_penalty,
+    )
 
 
 def _select_llm_candidates(signals: list[dict]) -> list[dict]:
@@ -80,22 +94,6 @@ def _mark_llm_not_selected(signals: list[dict], scan_date: str) -> None:
             f"{LLM_VALIDATION_LIMIT} rule-ranked stocks."
         )
         sig["panel_method"] = "LOCAL_RANK_SKIP"
-
-
-# == helpers ================================================================
-
-def _ensure_instruments(symbols: list):
-    """
-    Upsert a minimal instruments row for each symbol in a custom list.
-    Used when the caller passes symbols directly (bypassing fetch_nse_instruments).
-    Keeps the instruments table consistent so the ohlcv FK is always satisfied.
-    """
-    rows = []
-    for sym in symbols:
-        rows.append({"symbol": sym, "instrument_key": sym, "name": sym})
-    if rows:
-        import pandas as pd
-        save_instruments(pd.DataFrame(rows))
 
 
 def _effective_scan_date(scan_date: str = None) -> str:
@@ -140,6 +138,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     target_date = _effective_scan_date(scan_date)
     print(Fore.CYAN + f"   Scan date : {target_date}")
     print(Fore.CYAN + "   Data      : NSE Bhavcopy")
+    print(Fore.CYAN + f"   Signals   : {', '.join(sorted(SCAN_SIGNAL_TYPES)) or 'BREAKOUT'}")
     print(Fore.CYAN + f"   Validator : {_validator_name()}")
     if force_refresh:
         print(Fore.YELLOW + "   Mode      : FORCE REFRESH (ignoring OHLCV cache)")
@@ -175,7 +174,6 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     if symbols:
         raw_count = len(symbols)
         universe  = [s for s in symbols if s not in invalid_symbols]
-        _ensure_instruments(universe)   # FK safety for custom symbols
         removed = raw_count - len(universe)
         print(Fore.YELLOW + f"\n[3/5] Scanning {len(universe)} provided symbols"
               + (f" ({removed} blacklisted removed)." if removed else "."))
@@ -185,7 +183,6 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         if instruments_df.empty:
             print(Fore.RED + "  [ERROR] Could not load NSE instruments. Aborting scan.")
             return []
-        save_instruments(instruments_df)   # persist symbol/key/name to instruments table
         raw_count = len(instruments_df)
         universe  = [s for s in instruments_df["symbol"].tolist() if s not in invalid_symbols]
         print(f"  Universe: {len(universe)} NSE EQ instruments "
@@ -195,43 +192,55 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     signals     = []
     open_pos    = {p["symbol"] for p in get_open_positions()}
     total       = len(universe)
-    downloaded  = 0
-    cached_hits = 0
     skipped     = 0
 
-    # Single query to load ALL cached dates at once (replaces ~1800 per-symbol queries)
-    ohlcv_date_map = get_bhavcopy_date_map()
+    scan_universe = [s for s in universe if s not in open_pos]
+    skipped = total - len(scan_universe)
+    print(f"  Loading OHLCV cache for {len(scan_universe)} scan symbol(s)...")
+    ohlcv_by_symbol = load_bhavcopy_ohlcv_bulk(scan_universe, upto_date=target_date)
+    use_breakout = not SCAN_SIGNAL_TYPES or "BREAKOUT" in SCAN_SIGNAL_TYPES
+    use_pullback = "PULLBACK" in SCAN_SIGNAL_TYPES
+    scanners = []
+    if use_breakout:
+        scanners.append(is_breakout)
+    if use_pullback:
+        scanners.append(is_ma_pullback)
+    if not scanners:
+        print(Fore.YELLOW + "  [WARN] SCAN_SIGNAL_TYPES matched no known scanners; using BREAKOUT.")
+        use_breakout = True
+        scanners.append(is_breakout)
+    prefiltered = 0
 
     for i, symbol in enumerate(universe, 1):
         if symbol in open_pos:
-            skipped += 1
             continue
 
         print(f"  [{i:>4}/{total}] {symbol:<20} ", end="\r")
 
-        cached = ohlcv_date_map.get(symbol)   # O(1) dict lookup, no DB call
-        if not force_refresh and cached and cached >= target_date:
-            df = load_bhavcopy_ohlcv(symbol)
-            cached_hits += 1
-        else:
-            df = fetch_bhavcopy_historical(symbol, scan_date=target_date)
-            if not df.empty:
-                downloaded += 1
+        df = ohlcv_by_symbol.get(symbol)
 
-        if df.empty:
+        if df is None or df.empty:
             # Permanently blacklist symbols that never return data (delisted / suspended)
             add_invalid_instrument(symbol, "NO_DATA", "SCAN_EMPTY")
             invalid_symbols.add(symbol)   # update in-memory set for this run too
             continue
 
-        for scanner in (is_breakout, is_ma_pullback):
+        if use_breakout and not use_pullback and not passes_breakout_prefilter(df):
+            prefiltered += 1
+            continue
+
+        df = add_indicators(df)
+        for scanner in scanners:
             sig = scanner(df)
             if sig:
                 sig["symbol"] = symbol
                 sig["news"]   = get_news_for_symbol(symbol)
                 signals.append(sig)
 
-    print(f"\n  Done. Downloaded: {downloaded} | From cache: {cached_hits} | Skipped (open pos): {skipped}")
+    print(
+        f"\n  Done. Loaded from cache: {len(ohlcv_by_symbol)} "
+        f"| Prefiltered: {prefiltered} | Skipped (open pos): {skipped}"
+    )
 
     signals.sort(key=_rank_signal, reverse=True)
 
