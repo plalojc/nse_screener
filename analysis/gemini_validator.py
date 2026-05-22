@@ -288,7 +288,11 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
     rate_lim   = _AsyncRateLimiter(rpm)
     print_lock = asyncio.Lock()
 
-    verdict_cache = get_llm_verdict_cache(scan_date)
+    verdict_cache = get_llm_verdict_cache(
+        scan_date,
+        panel_method="GEMINI_DIRECT",
+        llm_model=GEMINI_VALIDATOR_MODEL,
+    )
     total         = len(signals)
     cache_count   = 0
     api_counter   = [0]  # mutable int shared across coroutines
@@ -336,6 +340,7 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
                 sig["llm_confidence"] = 1
                 sig["llm_reasoning"]  = "Auto-blacklisted: Gemini identified this as an ETF/Fund/Liquid Fund, not a regular equity."
                 sig["panel_method"]   = "GEMINI_DIRECT"
+                sig["llm_model"]      = GEMINI_VALIDATOR_MODEL
                 async with print_lock:
                     api_counter[0] += 1
                     idx = api_counter[0]
@@ -366,6 +371,7 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
         sig["llm_confidence"] = confidence
         sig["llm_reasoning"]  = reasoning[:500]
         sig["panel_method"]   = "GEMINI_DIRECT"
+        sig["llm_model"]      = GEMINI_VALIDATOR_MODEL
 
         async with print_lock:
             api_counter[0] += 1
@@ -411,6 +417,7 @@ def validate_signals_gemini_direct(signals: list, scan_date: str) -> list:
             sig["llm_confidence"] = None
             sig["llm_reasoning"]  = "GEMINI_VALIDATOR_API_KEY not set"
             sig["panel_method"]   = "SKIPPED"
+            sig["llm_model"]      = GEMINI_VALIDATOR_MODEL
         return signals
 
     try:
@@ -424,6 +431,7 @@ def validate_signals_gemini_direct(signals: list, scan_date: str) -> list:
             sig["llm_confidence"] = None
             sig["llm_reasoning"]  = "google-genai not installed"
             sig["panel_method"]   = "SKIPPED"
+            sig["llm_model"]      = GEMINI_VALIDATOR_MODEL
         return signals
 
     rpm = max(1, int(round(60.0 / GEMINI_VALIDATOR_RATE_DELAY)))

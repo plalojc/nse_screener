@@ -39,7 +39,7 @@ from datetime import datetime, timedelta
 
 from analysis.breakout_scanner import is_breakout, is_ma_pullback
 from config import ATR_SL_MULTIPLIER, STOP_LOSS_PCT
-from data.database import (
+from data.nse_bhavcopy_client import (
     get_symbols_with_data_upto,
     load_ohlcv_upto,
     load_ohlcv_range,
@@ -50,8 +50,8 @@ from data.database import (
 
 def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
     """
-    Run the screener on *signal_date* using DB-only data, then evaluate each signal
-    against the next *forward_days* calendar days of OHLCV data from the DB.
+    Run the screener on *signal_date* using cached NSE Bhavcopy data, then evaluate
+    each signal against the next *forward_days* calendar days of OHLCV data.
 
     Parameters
     ----------
@@ -70,8 +70,8 @@ def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
     total   = len(symbols)
 
     if total == 0:
-        print(f"  [WARN] No OHLCV data found in DB for date <= {signal_date}.")
-        print(  "         Run a scan first to populate the cache.")
+        print(f"  [WARN] No NSE Bhavcopy data found for date <= {signal_date}.")
+        print(  "         Run a scan first to populate the Bhavcopy cache.")
         return []
 
     print(f"  {total} symbols in DB with data up to {signal_date}")

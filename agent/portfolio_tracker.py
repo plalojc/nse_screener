@@ -4,7 +4,7 @@
 # ============================================================
 from data.database      import (get_open_positions, close_position,
                                  save_signal, update_trailing_stop)
-from data.upstox_client import fetch_historical, fetch_ltp
+from data.nse_bhavcopy_client import fetch_historical
 from analysis.technical import add_indicators
 from config import (PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     MAX_HOLD_DAYS, ATR_TRAIL_MULTIPLIER)
@@ -13,15 +13,10 @@ from tabulate import tabulate
 import pandas as pd
 
 
-def _get_current_price(symbol: str, ltp_cache: dict) -> float | None:
+def _get_current_price(symbol: str) -> float | None:
     """
-    Return the most up-to-date price for a symbol.
-    1. Try the LTP cache (live/EOD from Upstox market-quote API).
-    2. Fall back to the last row of the historical candle data.
+    Return the latest close for a symbol from NSE Bhavcopy history.
     """
-    if symbol in ltp_cache:
-        return ltp_cache[symbol]
-    # Fallback: last close from historical API
     df = fetch_historical(symbol)
     if not df.empty:
         return float(df["close"].iloc[-1])
@@ -45,13 +40,7 @@ def check_exit_signals():
     if not positions:
         return exits
 
-    # ── Batch-fetch live prices for all open positions upfront ───────────
-    symbols   = [p["symbol"] for p in positions]
-    ltp_cache = fetch_ltp(symbols)
-    if ltp_cache:
-        print(f"  [LTP] Live prices fetched for {len(ltp_cache)}/{len(symbols)} symbols.")
-    else:
-        print("  [LTP] Market closed or LTP unavailable – using last historical close.")
+    print("  [Prices] Using latest NSE Bhavcopy close for open positions.")
 
     for pos in positions:
         symbol    = pos["symbol"]
@@ -59,7 +48,7 @@ def check_exit_signals():
         buy_date  = datetime.strptime(pos["buy_date"], "%Y-%m-%d").date()
         days_held = (date.today() - buy_date).days
 
-        current_price = _get_current_price(symbol, ltp_cache)
+        current_price = _get_current_price(symbol)
         if current_price is None:
             print(f"  [WARN] Could not get price for {symbol}, skipping.")
             continue
@@ -123,14 +112,11 @@ def print_portfolio():
         print("No open positions.")
         return
 
-    # Batch-fetch live LTP for all positions in one API call
-    symbols   = [pos["symbol"] for pos in positions]
-    ltp_cache = fetch_ltp(symbols)
-    market_status = "LIVE" if ltp_cache else "CLOSED (last close)"
+    market_status = "Bhavcopy close"
 
     rows = []
     for pos in positions:
-        cmp = _get_current_price(pos["symbol"], ltp_cache)
+        cmp = _get_current_price(pos["symbol"])
         if cmp is None:
             cmp = pos["buy_price"]   # last resort
         pnl   = (cmp - pos["buy_price"]) / pos["buy_price"] * 100

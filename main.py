@@ -20,14 +20,14 @@ def main():
     _configure_console_encoding()
     parser = argparse.ArgumentParser(description="NSE Breakout Agent")
     parser.add_argument("command", nargs="?", default="scan",
-                        choices=["scan", "portfolio", "schedule", "log", "backtest", "auth", "clear-log"],
+                        choices=["scan", "portfolio", "schedule", "log", "backtest", "clear-log"],
                         help="Command to run (default: scan)")
     parser.add_argument("--date", default=None, metavar="YYYY-MM-DD",
                         help="Override scan date, e.g. --date 2026-02-27")
     parser.add_argument("--days", type=int, default=30, metavar="N",
                         help="Days of breakout history to show with 'log' command (default: 30)")
     parser.add_argument("--force-refresh", action="store_true",
-                        help="Bypass OHLCV cache and re-download all data from Upstox")
+                        help="Refresh the latest NSE Bhavcopy data")
     args = parser.parse_args()
 
     init_db()
@@ -53,9 +53,6 @@ def main():
         _print_breakout_log(args.days)
     elif args.command == "backtest":
         _run_backtest(args.date, args.days)
-    elif args.command == "auth":
-        from auth.upstox_auth import refresh_token
-        refresh_token()
     elif args.command == "clear-log":
         _clear_breakout_log(args.date)
 

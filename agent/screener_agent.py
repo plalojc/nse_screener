@@ -7,14 +7,10 @@ from datetime import date, datetime, timedelta
 from tabulate import tabulate
 from colorama import Fore, Style, init
 
-from data.database       import (init_db, save_ohlcv, save_signal,
+from data.database       import (init_db, save_signal,
                                   open_position, get_open_positions,
-                                  ohlcv_latest_date, load_ohlcv,
-                                  save_breakout_log, get_ohlcv_date_map,
-                                  save_instruments,
+                                  save_breakout_log, save_instruments,
                                   get_invalid_symbols, add_invalid_instrument)
-from data.upstox_client  import fetch_historical as fetch_upstox_historical
-from data.upstox_client  import fetch_nse_instruments as fetch_upstox_instruments
 from data.nse_bhavcopy_client import fetch_historical as fetch_bhavcopy_historical
 from data.nse_bhavcopy_client import fetch_nse_instruments as fetch_bhavcopy_instruments
 from data.nse_bhavcopy_client import get_ohlcv_date_map as get_bhavcopy_date_map
@@ -23,23 +19,67 @@ from data.nse_bhavcopy_client import update_bhavcopy_cache
 from analysis.breakout_scanner import is_breakout, is_ma_pullback
 from analysis.news_fetcher     import fetch_and_store_news, get_news_for_symbol
 from analysis.gemini_validator import validate_signals_gemini_direct
+from analysis.grok_validator import validate_signals_grok_batch
 from agent.portfolio_tracker   import check_exit_signals
-from config import (DATA_SOURCE, MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
+from config import (LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
+                    MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, TOP_PICKS_COUNT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
                     TOP_PICKS_RSI_MAX, REPORT_DIR,
-                    GEMINI_VALIDATOR_MODEL)
+                    GEMINI_VALIDATOR_MODEL, GROK_VALIDATOR_MODEL)
 from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
 
 
-def _using_bhavcopy() -> bool:
-    return DATA_SOURCE == "nse_bhavcopy"
+def _validator_name() -> str:
+    return "Grok" if LLM_VALIDATOR == "grok" else "Gemini"
 
 
-def _source_name() -> str:
-    return "NSE Bhavcopy" if _using_bhavcopy() else "Upstox"
+def _rank_signal(sig: dict) -> tuple:
+    """Built-in ranking before paid/remote LLM validation."""
+    stage_bonus = 2 if sig.get("stage") == "Stage2" else 0
+    pattern_score = sig.get("pattern_score") or 0
+    score = sig.get("score") or 0
+    vol_ratio = sig.get("vol_ratio") or 0
+    rsi = sig.get("rsi") or 99
+    rsi_penalty = abs(65 - rsi)
+    return (score + stage_bonus, pattern_score, vol_ratio, -rsi_penalty)
+
+
+def _select_llm_candidates(signals: list[dict]) -> list[dict]:
+    """
+    Pick the top N unique symbols for LLM validation using local scanner output.
+    If one symbol has multiple signal rows, all rows for selected symbols are
+    passed through so reporting stays consistent.
+    """
+    if LLM_VALIDATION_LIMIT <= 0 or len(signals) <= LLM_VALIDATION_LIMIT:
+        return signals
+
+    ranked = sorted(signals, key=_rank_signal, reverse=True)
+    selected_symbols = []
+    selected_set = set()
+    for sig in ranked:
+        symbol = sig.get("symbol")
+        if symbol and symbol not in selected_set:
+            selected_symbols.append(symbol)
+            selected_set.add(symbol)
+        if len(selected_symbols) >= LLM_VALIDATION_LIMIT:
+            break
+
+    return [sig for sig in signals if sig.get("symbol") in selected_set]
+
+
+def _mark_llm_not_selected(signals: list[dict], scan_date: str) -> None:
+    for sig in signals:
+        sig["scan_date"] = scan_date
+        sig["llm_verdict"] = "SKIPPED"
+        sig["llm_confidence"] = 0
+        sig["llm_reasoning"] = (
+            f"Not sent to {_validator_name()}: outside top "
+            f"{LLM_VALIDATION_LIMIT} rule-ranked stocks."
+        )
+        sig["panel_method"] = "LOCAL_RANK_SKIP"
 
 
 # â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -52,15 +92,7 @@ def _ensure_instruments(symbols: list):
     """
     rows = []
     for sym in symbols:
-        if _using_bhavcopy():
-            rows.append({"symbol": sym, "instrument_key": sym, "name": sym})
-        else:
-            from data.upstox_client import get_instrument_key, get_instrument_name
-            try:
-                ikey = get_instrument_key(sym)
-            except KeyError:
-                ikey = ""
-            rows.append({"symbol": sym, "instrument_key": ikey, "name": get_instrument_name(sym)})
+        rows.append({"symbol": sym, "instrument_key": sym, "name": sym})
     if rows:
         import pandas as pd
         save_instruments(pd.DataFrame(rows))
@@ -87,24 +119,6 @@ def _effective_scan_date(scan_date: str = None) -> str:
         
     return d.strftime("%Y-%m-%d")
 
-
-def _get_ohlcv(symbol: str, target_date: str, scan_date: str = None) -> pd.DataFrame:
-    """
-    Return OHLCV for a symbol.
-    If SQLite already has data up to target_date â†’ load from cache (no API call).
-    Otherwise download from Upstox, persist to SQLite, and return.
-    """
-    cached = ohlcv_latest_date(symbol)
-    if cached and cached >= target_date:
-        return load_ohlcv(symbol)           # cache hit
-
-    # cache miss - download from Upstox
-    df = fetch_upstox_historical(symbol, scan_date=scan_date)
-    if not df.empty:
-        save_ohlcv(symbol, df)
-    return df
-
-
 # -----------------------------------------------------------
 
 def run_daily_scan(symbols: list = None, scan_date: str = None,
@@ -114,9 +128,9 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     1. Check exit conditions on open positions
     2. Fetch news
     3. Screen the full NSE EQ universe (or a provided list) for breakouts
-       â€“ Uses SQLite cache; only calls Upstox for symbols without up-to-date data.
-       â€“ Pass force_refresh=True to bypass cache and re-download all OHLCV data.
-    4. LLM validation of every signal
+       - Uses NSE Bhavcopy cache; downloads missing Bhavcopy files as needed.
+       - Pass force_refresh=True to refresh the latest Bhavcopy file.
+    4. LLM validation of top rule-ranked signals only
     5. Auto-open Stage2 positions for top signals
     """
     print(Fore.CYAN + "=" * 60)
@@ -125,20 +139,19 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     target_date = _effective_scan_date(scan_date)
     print(Fore.CYAN + f"   Scan date : {target_date}")
-    print(Fore.CYAN + f"   Data      : {_source_name()}")
+    print(Fore.CYAN + "   Data      : NSE Bhavcopy")
+    print(Fore.CYAN + f"   Validator : {_validator_name()}")
     if force_refresh:
         print(Fore.YELLOW + "   Mode      : FORCE REFRESH (ignoring OHLCV cache)")
 
     init_db()
 
-    if _using_bhavcopy():
-        # MODIFIED: Pass the force_refresh parameter here
-        latest = update_bhavcopy_cache(scan_date=target_date, force_refresh=force_refresh)
-        if not latest:
-            print(Fore.RED + "   [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
-            return []
-        target_date = latest
-        print(Fore.CYAN + f"   Bhavcopy  : using cached trading date {target_date}")
+    latest = update_bhavcopy_cache(scan_date=target_date, force_refresh=force_refresh)
+    if not latest:
+        print(Fore.RED + "   [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
+        return []
+    target_date = latest
+    print(Fore.CYAN + f"   Bhavcopy  : using cached trading date {target_date}")
 
     # 
     print(Fore.YELLOW + "\n[1/5] Checking exit conditions...")
@@ -168,7 +181,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
               + (f" ({removed} blacklisted removed)." if removed else "."))
     else:
         print(Fore.YELLOW + "\n[3/5] Loading NSE EQ universe...")
-        instruments_df = fetch_bhavcopy_instruments() if _using_bhavcopy() else fetch_upstox_instruments()
+        instruments_df = fetch_bhavcopy_instruments()
         if instruments_df.empty:
             print(Fore.RED + "  [ERROR] Could not load NSE instruments. Aborting scan.")
             return []
@@ -187,7 +200,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     skipped     = 0
 
     # Single query to load ALL cached dates at once (replaces ~1800 per-symbol queries)
-    ohlcv_date_map = get_bhavcopy_date_map() if _using_bhavcopy() else get_ohlcv_date_map()
+    ohlcv_date_map = get_bhavcopy_date_map()
 
     for i, symbol in enumerate(universe, 1):
         if symbol in open_pos:
@@ -198,16 +211,11 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
         cached = ohlcv_date_map.get(symbol)   # O(1) dict lookup, no DB call
         if not force_refresh and cached and cached >= target_date:
-            df = load_bhavcopy_ohlcv(symbol) if _using_bhavcopy() else load_ohlcv(symbol)
+            df = load_bhavcopy_ohlcv(symbol)
             cached_hits += 1
         else:
-            df = fetch_bhavcopy_historical(symbol, scan_date=target_date) if _using_bhavcopy() else fetch_upstox_historical(symbol, scan_date=scan_date)
-            if not df.empty and not _using_bhavcopy():
-                save_ohlcv(symbol, df)
-                # Keep date map fresh so a later occurrence of the same symbol is correct
-                ohlcv_date_map[symbol] = df["date"].iloc[-1] if hasattr(df["date"].iloc[-1], '__str__') else str(df["date"].iloc[-1])
-                downloaded += 1
-            elif not df.empty:
+            df = fetch_bhavcopy_historical(symbol, scan_date=target_date)
+            if not df.empty:
                 downloaded += 1
 
         if df.empty:
@@ -225,18 +233,39 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     print(f"\n  Done. Downloaded: {downloaded} | From cache: {cached_hits} | Skipped (open pos): {skipped}")
 
-    signals.sort(key=lambda x: x["score"], reverse=True)
+    signals.sort(key=_rank_signal, reverse=True)
 
-    # Step 4 - Gemini validation
+    # Step 4 - LLM validation
     if signals:
-        print(Fore.YELLOW + f"\n[4/5] Gemini validation ({len(signals)} signal(s))...")
-        print(Fore.CYAN + f"      Model  : {GEMINI_VALIDATOR_MODEL}")
-        print(Fore.CYAN + "      Source : Gemini + Google Search grounding")
-        validate_signals_gemini_direct(signals, scan_date=target_date)
+        llm_candidates = _select_llm_candidates(signals)
+        llm_candidate_ids = {id(sig) for sig in llm_candidates}
+        skipped_llm = [sig for sig in signals if id(sig) not in llm_candidate_ids]
+        _mark_llm_not_selected(skipped_llm, target_date)
+
+        limit_text = "all" if LLM_VALIDATION_LIMIT <= 0 else f"top {LLM_VALIDATION_LIMIT}"
+        print(
+            Fore.CYAN
+            + f"  LLM gate : sending {len(llm_candidates)}/{len(signals)} signal row(s) "
+            + f"({limit_text} unique stocks by local rank)"
+        )
+
+        if LLM_VALIDATOR == "grok":
+            print(Fore.YELLOW + f"\n[4/5] Grok batch validation ({len(llm_candidates)} signal(s))...")
+            print(Fore.CYAN + f"      Model  : {GROK_VALIDATOR_MODEL}")
+            print(Fore.CYAN + "      Source : Grok web/X-aware batch analysis")
+            validate_signals_grok_batch(llm_candidates, scan_date=target_date)
+        else:
+            print(Fore.YELLOW + f"\n[4/5] Gemini validation ({len(llm_candidates)} signal(s))...")
+            print(Fore.CYAN + f"      Model  : {GEMINI_VALIDATOR_MODEL}")
+            print(Fore.CYAN + "      Source : Gemini + Google Search grounding")
+            validate_signals_gemini_direct(llm_candidates, scan_date=target_date)
 
         for sig in signals:
             save_breakout_log(target_date, sig)
-        print(f"  {len(signals)} signal(s) saved to breakout_log.")
+        print(
+            f"  {len(signals)} signal(s) saved to breakout_log "
+            f"({len(skipped_llm)} skipped before LLM)."
+        )
 
     else:
         for sig in signals:
@@ -423,7 +452,7 @@ def _print_top_picks(signals: list, scan_date: str):
         print(verdict_colour +
               f"  #{rank}  {s['symbol']:<12}  â‚¹{bp:<9.2f}  "
               f"Score:{s['score']}  RSI:{s['rsi']:.0f}  Vol:{s['vol_ratio']:.1f}x  "
-              f"Gemini:{s.get('llm_verdict')}({conf}/10){pattern_badges}")
+              f"{_validator_name()}:{s.get('llm_verdict')}({conf}/10){pattern_badges}")
         print(Style.RESET_ALL +
               f"      Entry â‚¹{bp:.2f}  â†’  Target â‚¹{tp:.2f}  â†’  SL â‚¹{sl:.2f}  "
               f"(Risk {rr}% | 2R reward)")

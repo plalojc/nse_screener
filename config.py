@@ -6,19 +6,11 @@ from dotenv import load_dotenv
 
 load_dotenv(override=False)
 
-# Upstox
-UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "")
-UPSTOX_BASE_URL = "https://api.upstox.com/v2"
-UPSTOX_HIST_URL = "https://api.upstox.com/v2/historical-candle"
-
 # Database and reports
 DB_PATH = os.getenv("DB_PATH", "nse_agent.db")
 NSE_BHAVCOPY_DB_PATH = os.getenv("NSE_BHAVCOPY_DB_PATH", "nse_bhavcopy.db")
 NSE_BHAVCOPY_DIR = os.getenv("NSE_BHAVCOPY_DIR", "data/bhavcopy")
 REPORT_DIR = os.getenv("REPORT_DIR", "reports")
-
-# Data source: "upstox" or "nse_bhavcopy".
-DATA_SOURCE = os.getenv("DATA_SOURCE", "upstox").lower()
 
 # Screener settings
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "365"))
@@ -54,8 +46,19 @@ NEWS_RSS_FEEDS = [
 # Scheduler
 SCAN_TIME_IST = os.getenv("SCAN_TIME_IST", "08:20")
 
+# LLM validator: "gemini" or "grok".
+LLM_VALIDATOR = os.getenv("LLM_VALIDATOR", "gemini").lower()
+LLM_VALIDATION_LIMIT = int(os.getenv("LLM_VALIDATION_LIMIT", "100"))
+
 # Gemini decision engine
 GEMINI_VALIDATOR_API_KEY = os.getenv("GEMINI_VALIDATOR_API_KEY", "")
 GEMINI_VALIDATOR_MODEL = os.getenv("GEMINI_VALIDATOR_MODEL", "gemini-2.5-flash")
 GEMINI_VALIDATOR_RATE_DELAY = float(os.getenv("GEMINI_VALIDATOR_RATE_DELAY", "6.0"))
 GEMINI_VALIDATOR_CONCURRENCY = int(os.getenv("GEMINI_VALIDATOR_CONCURRENCY", "10"))
+
+# Grok decision engine (xAI OpenAI-compatible API)
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+GROK_VALIDATOR_MODEL = os.getenv("GROK_VALIDATOR_MODEL", "grok-4.20-reasoning")
+GROK_VALIDATOR_BATCH_SIZE = int(os.getenv("GROK_VALIDATOR_BATCH_SIZE", "10"))
+GROK_VALIDATOR_MAX_RETRIES = int(os.getenv("GROK_VALIDATOR_MAX_RETRIES", "3"))
+GROK_VALIDATOR_BATCH_DELAY = float(os.getenv("GROK_VALIDATOR_BATCH_DELAY", "1.0"))

@@ -4,8 +4,8 @@ A focused NSE equity breakout scanner.
 
 The project now uses only:
 
-- Upstox or NSE Bhavcopy for NSE instruments/OHLCV data
-- Gemini with Google Search grounding to validate trade signals
+- NSE Bhavcopy for NSE instruments/OHLCV data
+- Gemini or Grok to validate trade signals
 - SQLite for local cache/history
 - HTML reports for scan and backtest output
 
@@ -26,11 +26,9 @@ nse_breakout_agent/
 |   |-- pattern_scanner.py
 |   |-- news_fetcher.py
 |   |-- gemini_validator.py
+|   |-- grok_validator.py
 |   |-- backtester.py
-|-- auth/
-|   |-- upstox_auth.py
 |-- data/
-|   |-- upstox_client.py
 |   |-- nse_bhavcopy_client.py
 |   |-- database.py
 |-- report/
@@ -49,18 +47,29 @@ copy env.example .env
 Edit `.env` and set:
 
 ```env
-DATA_SOURCE=upstox
-UPSTOX_CLIENT_ID=...
-UPSTOX_CLIENT_SECRET=...
-UPSTOX_REDIRECT_URI=http://127.0.0.1:8765/callback
+NSE_BHAVCOPY_DB_PATH=nse_bhavcopy.db
+NSE_BHAVCOPY_DIR=data/bhavcopy
 GEMINI_VALIDATOR_API_KEY=...
 ```
 
-Refresh the Upstox token:
+Choose the validator:
 
-```powershell
-.\venv\Scripts\python.exe main.py auth
+```env
+LLM_VALIDATOR=gemini
 ```
+
+or:
+
+```env
+LLM_VALIDATOR=grok
+XAI_API_KEY=...
+GROK_VALIDATOR_MODEL=grok-4.20-reasoning
+GROK_VALIDATOR_BATCH_SIZE=10
+LLM_VALIDATION_LIMIT=100
+```
+
+`LLM_VALIDATION_LIMIT` controls how many top locally ranked stocks are sent to
+Gemini or Grok. Set it to `0` to validate every signal.
 
 Run a scan:
 
@@ -70,21 +79,13 @@ Run a scan:
 
 ## NSE Bhavcopy Data
 
-To use NSE Bhavcopy instead of Upstox historical candles:
-
-```env
-DATA_SOURCE=nse_bhavcopy
-NSE_BHAVCOPY_DB_PATH=nse_bhavcopy.db
-NSE_BHAVCOPY_DIR=data/bhavcopy
-```
-
-Then run:
+Run:
 
 ```powershell
 .\venv\Scripts\python.exe main.py scan
 ```
 
-The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters `SERIES == EQ`, stores OHLCV in `nse_bhavcopy.db`, and runs the same breakout logic over that cache. Upstox remains available for `DATA_SOURCE=upstox` and for OAuth/LTP workflows.
+The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters `SERIES == EQ`, stores OHLCV in `nse_bhavcopy.db`, and runs the breakout logic over that cache.
 
 ## Commands
 
@@ -95,21 +96,21 @@ The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters
 .\venv\Scripts\python.exe main.py log --days 30
 .\venv\Scripts\python.exe main.py backtest --date 2026-02-16 --days 30
 .\venv\Scripts\python.exe main.py schedule
-.\venv\Scripts\python.exe main.py auth
 ```
 
 ## Flow
 
-1. Load NSE EQ instruments from the configured data source.
+1. Load NSE EQ instruments from NSE Bhavcopy.
 2. Filter invalid instruments and ETFs.
 3. Load OHLCV from SQLite cache or fetch fresh data.
 4. Detect breakout and pullback setups.
-5. Validate each signal with Gemini and Google Search grounding.
+5. Rank signals locally and validate only the top `LLM_VALIDATION_LIMIT` stocks with the configured LLM validator.
+   - Gemini validates per signal with Google Search grounding.
+   - Grok validates compact batches through xAI's OpenAI-compatible API.
 6. Save signal history to SQLite.
 7. Print candidates, top picks, portfolio entries, and an HTML report.
 
 ## Notes
 
-- Upstox access tokens must still be approved through the official Upstox login flow.
-- Gemini is the only decision engine in this codebase.
+- Gemini and Grok are the supported decision engines.
 - Generated reports and the SQLite DB are local runtime artifacts and are ignored by Git.

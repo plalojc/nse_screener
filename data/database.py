@@ -106,6 +106,7 @@ def init_db():
             llm_verdict     TEXT,           -- CONFIRM / WEAK / REJECT / SKIPPED
             llm_confidence  INTEGER,        -- 1-10
             llm_reasoning   TEXT,
+            llm_model       TEXT,
             created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(scan_date, symbol)       -- one entry per symbol per day
         )
@@ -116,6 +117,7 @@ def init_db():
         ("llm_verdict",        "TEXT"),
         ("llm_confidence",     "INTEGER"),
         ("llm_reasoning",      "TEXT"),
+        ("llm_model",          "TEXT"),
         ("panel_method",       "TEXT"),
         ("vcp_detected",       "INTEGER"),
         ("bull_flag_detected", "INTEGER"),
@@ -347,30 +349,47 @@ def close_position(symbol, exit_price, pnl_pct):
 
 # â”€â”€ Breakout Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-def get_llm_verdict_cache(scan_date: str) -> dict:
+def get_llm_verdict_cache(
+    scan_date: str,
+    panel_method: str | None = None,
+    llm_model: str | None = None,
+) -> dict:
     """
     Return already-validated LLM verdicts for a given scan_date.
     Only returns rows where llm_verdict is a real verdict (not SKIPPED).
     Result: {symbol: {llm_verdict, llm_confidence, llm_reasoning}}
     Used to skip LLM API calls for signals already validated today.
+
+    When panel_method/llm_model are provided, only cache entries produced by
+    that validator/model are reused. This prevents Grok runs from reusing Gemini
+    verdicts, and also forces old rows with missing model metadata to be
+    revalidated once.
     """
     conn = get_conn()
-    rows = conn.execute(
-        """
-        SELECT symbol, llm_verdict, llm_confidence, llm_reasoning
+    sql = """
+        SELECT symbol, llm_verdict, llm_confidence, llm_reasoning,
+               panel_method, llm_model
         FROM   breakout_log
         WHERE  scan_date = ?
           AND  llm_verdict NOT IN ('SKIPPED', '')
           AND  llm_verdict IS NOT NULL
-        """,
-        (scan_date,)
-    ).fetchall()
+    """
+    params = [scan_date]
+    if panel_method:
+        sql += " AND panel_method = ?"
+        params.append(panel_method)
+    if llm_model:
+        sql += " AND llm_model = ?"
+        params.append(llm_model)
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return {
         r["symbol"]: {
             "llm_verdict":    r["llm_verdict"],
             "llm_confidence": r["llm_confidence"],
             "llm_reasoning":  r["llm_reasoning"],
+            "panel_method":   r["panel_method"],
+            "llm_model":      r["llm_model"],
         }
         for r in rows
     }
@@ -384,8 +403,8 @@ def save_breakout_log(scan_date: str, sig: dict):
             (scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
              stage, ema20, ema50, atr14, swing_low, reasons,
              llm_verdict, llm_confidence, llm_reasoning,
-             panel_method, vcp_detected, bull_flag_detected, pattern_score)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             panel_method, llm_model, vcp_detected, bull_flag_detected, pattern_score)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(scan_date, symbol) DO UPDATE SET
             signal_type = excluded.signal_type,
             close       = excluded.close,
@@ -413,7 +432,16 @@ def save_breakout_log(scan_date: str, sig: dict):
                 WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_reasoning
                 ELSE llm_reasoning
             END,
-            panel_method       = COALESCE(excluded.panel_method, panel_method),
+            panel_method = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.panel_method
+                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.panel_method
+                ELSE panel_method
+            END,
+            llm_model = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_model
+                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_model
+                ELSE llm_model
+            END,
             vcp_detected       = COALESCE(excluded.vcp_detected, vcp_detected),
             bull_flag_detected = COALESCE(excluded.bull_flag_detected, bull_flag_detected),
             pattern_score      = COALESCE(excluded.pattern_score, pattern_score)
@@ -435,6 +463,7 @@ def save_breakout_log(scan_date: str, sig: dict):
         sig.get("llm_confidence"),
         sig.get("llm_reasoning"),
         sig.get("panel_method", "GEMINI_DIRECT"),
+        sig.get("llm_model"),
         sig.get("vcp_detected"),
         sig.get("bull_flag_detected"),
         sig.get("pattern_score"),

@@ -145,7 +145,6 @@ def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOO
     start = target - timedelta(days=lookback_days)
 
     conn = _get_conn()
-    # MODIFIED: If force_refresh is True and d is our target date, treat it as missing
     missing = [
         d for d in _weekdays_between(start, target) 
         if (force_refresh and d == target) or not _is_cached(conn, d)
@@ -221,6 +220,45 @@ def load_ohlcv(symbol: str) -> pd.DataFrame:
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"])
     return df
+
+
+def load_ohlcv_upto(symbol: str, upto_date: str) -> pd.DataFrame:
+    init_bhavcopy_db()
+    conn = _get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM bhavcopy_ohlcv WHERE symbol=? AND date<=? ORDER BY date",
+        conn,
+        params=(symbol, upto_date),
+    )
+    conn.close()
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def load_ohlcv_range(symbol: str, from_date: str, to_date: str) -> pd.DataFrame:
+    init_bhavcopy_db()
+    conn = _get_conn()
+    df = pd.read_sql(
+        "SELECT * FROM bhavcopy_ohlcv WHERE symbol=? AND date>? AND date<=? ORDER BY date",
+        conn,
+        params=(symbol, from_date, to_date),
+    )
+    conn.close()
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def get_symbols_with_data_upto(upto_date: str) -> list[str]:
+    init_bhavcopy_db()
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT symbol FROM bhavcopy_ohlcv WHERE date<=? ORDER BY symbol",
+        (upto_date,),
+    ).fetchall()
+    conn.close()
+    return [r["symbol"] for r in rows]
 
 
 def fetch_historical(symbol: str, scan_date: str | None = None) -> pd.DataFrame:
