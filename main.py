@@ -1,6 +1,6 @@
 
 # ============================================================
-# main.py – Entry point (manual or scheduled run)
+# main.py - Entry point (manual or scheduled run)
 # ============================================================
 import argparse
 import sys
@@ -39,7 +39,7 @@ def main():
             given = _date.fromisoformat(args.date)
             today = _date.today()
             if given < today:
-                print(f"  [INFO] {args.date} is a past date → running backtest automatically.")
+                print(f"  [INFO] {args.date} is a past date -> running backtest automatically.")
                 print(f"         (Use 'python main.py backtest --date {args.date}' to skip this message)\n")
                 _run_backtest(args.date, args.days)
                 return
@@ -69,7 +69,7 @@ def _print_breakout_log(days: int):
         print(f"No breakout signals in the last {days} days.")
         return
 
-    print(Fore.CYAN + f"\n── Breakout Log – last {days} days ({len(df)} signals) ─────")
+    print(Fore.CYAN + f"\n== Breakout Log - last {days} days ({len(df)} signals) ==")
     rows = []
     for _, r in df.iterrows():
         verdict = str(r.get("llm_verdict") or "")
@@ -83,13 +83,13 @@ def _print_breakout_log(days: int):
             llm_col = Fore.YELLOW + llm_col + Style.RESET_ALL
         rows.append([
             r["scan_date"], r["symbol"], r["signal_type"],
-            f"₹{r['close']}", r["rsi"], f"{r['vol_ratio']}x",
+            f"Rs.{r['close']}", r["rsi"], f"{r['vol_ratio']}x",
             r["score"], r["stage"], llm_col,
             str(r.get("llm_reasoning") or "")[:50],
         ])
     headers = ["Date", "Symbol", "Type", "Price", "RSI", "Vol",
                "Score", "Stage", "LLM", "LLM Reasoning"]
-    print(tabulate(rows, headers=headers, tablefmt="fancy_grid"))
+    print(tabulate(rows, headers=headers, tablefmt="grid"))
 
 
 def _run_backtest(signal_date: str | None, forward_days: int):
@@ -106,7 +106,7 @@ def _run_backtest(signal_date: str | None, forward_days: int):
     from report.backtest_report_writer import write as write_backtest_report
     from config import REPORT_DIR
 
-    print(Fore.CYAN + f"\n{'─'*20} BACKTEST {'─'*31}")
+    print(Fore.CYAN + f"\n{'='*20} BACKTEST {'='*31}")
     print(f"  Signal date  : {signal_date}")
     print(f"  Forward days : {forward_days}")
     print(f"  Data source  : local SQLite DB only (no API calls)\n")
@@ -118,14 +118,14 @@ def _run_backtest(signal_date: str | None, forward_days: int):
         print(             "  Make sure data for that date has been cached (run a scan first).")
         return
 
-    # ── Console summary ────────────────────────────────────────────────────
+    # == Console summary ===================================================
     wins   = sum(1 for r in results if r["outcome"] == "WIN")
     losses = sum(1 for r in results if r["outcome"] == "LOSS")
     opens  = sum(1 for r in results if r["outcome"] == "OPEN")
     total  = len(results)
     win_rate = round(wins / total * 100, 1) if total else 0
 
-    print(Fore.CYAN + f"\n{'─'*20} BACKTEST SUMMARY {'─'*22}")
+    print(Fore.CYAN + f"\n{'='*20} BACKTEST SUMMARY {'='*22}")
     print(f"  Total signals : {total}")
     color = Fore.GREEN if win_rate >= 50 else Fore.YELLOW if win_rate >= 35 else Fore.RED
     print(color + f"  Win Rate      : {win_rate}%  ({wins} WIN / {losses} LOSS / {opens} OPEN)")
@@ -137,10 +137,10 @@ def _run_backtest(signal_date: str | None, forward_days: int):
         avg_dd = round(sum(r["max_dd_pct"] for r in results if r["outcome"] == "LOSS") / losses, 2)
         print(Fore.RED   + f"  Avg max DD    : {avg_dd}% (on losing trades)")
 
-    # ── Write HTML report ──────────────────────────────────────────────────
+    # == Write HTML report =================================================
     try:
         html_path = write_backtest_report(results, REPORT_DIR, signal_date, forward_days)
-        print(Fore.CYAN + f"\n  📄 Backtest report saved → {html_path}")
+        print(Fore.CYAN + f"\n  Backtest report saved -> {html_path}")
     except Exception as exc:
         print(Fore.YELLOW + f"  [WARN] Could not write HTML report: {exc}")
 
@@ -169,7 +169,7 @@ def _clear_breakout_log(scan_date: str | None):
     for _, r in existing.iterrows():
         verdict = str(r.get("llm_verdict") or "")
         print(f"    {r['symbol']:<15}  {r['signal_type']:<10}  "
-              f"₹{r['close']}  LLM: {verdict}")
+              f"Rs.{r['close']}  LLM: {verdict}")
 
     print()
     confirm = input(Fore.YELLOW + f"  Delete all {len(existing)} row(s) for {scan_date}? [y/N] ").strip().lower()
@@ -178,7 +178,7 @@ def _clear_breakout_log(scan_date: str | None):
         return
 
     deleted = delete_breakout_log(scan_date)
-    print(Fore.GREEN + f"  ✓ Deleted {deleted} row(s) from breakout_log for {scan_date}.")
+    print(Fore.GREEN + f"  OK Deleted {deleted} row(s) from breakout_log for {scan_date}.")
 
 
 if __name__ == "__main__":

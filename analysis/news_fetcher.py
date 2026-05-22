@@ -1,6 +1,6 @@
 
 # ============================================================
-# analysis/news_fetcher.py – RSS market news fetcher
+# analysis/news_fetcher.py - RSS market news fetcher
 # ============================================================
 import feedparser
 import sqlite3

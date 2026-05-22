@@ -6,19 +6,19 @@ Writes the final list of qualifying signals to an HTML report file.
 Sorted by score descending (highest-conviction first).
 
 Columns rendered:
-  1. SL          – serial number
-  2. Symbol      – clickable (opens TradingView NSE chart)
-  3. Signal      – BREAKOUT / PULLBACK
-  4. Stage       – Stage1 / Stage2 / Stage3
-  5. Close (₹)  – today's closing price
-  6. RSI         – RSI-14 (colour-coded)
-  7. Vol          – volume ratio vs 20-day avg (colour-coded)
-  8. ATR14       – average true range (volatility context)
-  9. Near High % – % below 52-week high (lower = stronger positioning)
- 10. Score       – multi-factor score (colour-coded)
- 11. LLM Verdict – CONFIRM / WEAK / REJECT / SKIPPED (colour-coded)
- 12. LLM Conf    – LLM confidence 0-10
- 13. AI Reasoning – short reasoning text from LLM
+  1. SL          - serial number
+  2. Symbol      - clickable (opens TradingView NSE chart)
+  3. Signal      - BREAKOUT / PULLBACK
+  4. Stage       - Stage1 / Stage2 / Stage3
+  5. Close (Rs.)  - today's closing price
+  6. RSI         - RSI-14 (colour-coded)
+  7. Vol          - volume ratio vs 20-day avg (colour-coded)
+  8. ATR14       - average true range (volatility context)
+  9. Near High % - % below 52-week high (lower = stronger positioning)
+ 10. Score       - multi-factor score (colour-coded)
+ 11. LLM Verdict - CONFIRM / WEAK / REJECT / SKIPPED (colour-coded)
+ 12. LLM Conf    - LLM confidence 0-10
+ 13. AI Reasoning - short reasoning text from LLM
 """
 
 from __future__ import annotations
@@ -37,13 +37,13 @@ from config import (
 )
 
 
-# ── HTML page templates ───────────────────────────────────────────────────────
+# == HTML page templates =======================================================
 
 _PAGE_HEAD = """\
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>NSE Breakout Report – {date}</title>
+    <title>NSE Breakout Report - {date}</title>
     <style>
         body  {{ font-family: Arial, sans-serif; font-size: 13px; margin: 16px; }}
         h2    {{ color: #2c3e50; }}
@@ -54,7 +54,7 @@ _PAGE_HEAD = """\
         tr:nth-child(even) {{ background: #f9f9f9; }}
         tr:hover {{ background: #DAF7A6; cursor: pointer; }}
         td.reason {{ text-align: left; font-size: 11px; color: #444; max-width: 300px; }}
-        /* ── Top Picks ── */
+        /* == Top Picks == */
         .top-picks {{ background:#f0fdf4; border:2px solid #27ae60; border-radius:8px; padding:14px 18px; margin-bottom:20px; }}
         .top-picks h3 {{ margin:0 0 4px 0; color:#1a6e36; font-size:15px; }}
         .top-picks .subtitle {{ margin:0 0 12px 0; color:#555; font-size:12px; }}
@@ -117,7 +117,7 @@ _PAGE_FOOT = """\
 """
 
 
-# ── Top Picks helpers ─────────────────────────────────────────────────────
+# == Top Picks helpers =====================================================
 
 def _compute_sl_tp(sig: dict) -> tuple[float, float, float]:
     """Return (sl, tp, risk_pct) using ATR-based or swing-low or fallback SL."""
@@ -183,8 +183,8 @@ def _build_top_picks_html(signals: list, scan_date: str) -> str:
         reason   = (s.get("llm_reasoning") or "")[:160]
         sl, tp, risk_pct = _compute_sl_tp(s)
 
-        rsi_str  = f"{rsi:.0f}"  if rsi  is not None else "–"
-        vol_str  = f"{vol:.1f}x" if vol  is not None else "–"
+        rsi_str  = f"{rsi:.0f}"  if rsi  is not None else "-"
+        vol_str  = f"{vol:.1f}x" if vol  is not None else "-"
         conf_str = f"{conf}/10"  if conf is not None else "?"
         v_class  = "" if verdict == "CONFIRM" else " weak"
 
@@ -227,7 +227,7 @@ _ROW = (
 )
 
 
-# ── Colour helpers ────────────────────────────────────────────────────────────
+# == Colour helpers ============================================================
 
 def _signal_color(signal_type: str) -> str:
     return {"BREAKOUT": "#A9DFBF", "PULLBACK": "#AED6F1"}.get(signal_type, "#FFFFFF")
@@ -237,7 +237,7 @@ def _stage_color(stage: str) -> str:
 
 def _rsi_color(rsi: float) -> str:
     if rsi is None:   return "#FFFFFF"
-    if rsi >= 70:     return "#F5B7B1"   # overbought – caution
+    if rsi >= 70:     return "#F5B7B1"   # overbought - caution
     if rsi >= 55:     return "#A9DFBF"   # ideal momentum zone
     return "#FDEBD0"                      # below momentum threshold
 
@@ -248,9 +248,9 @@ def _vol_color(vol: float) -> str:
     return "#FDEBD0"                      # weak
 
 def _score_color(score: int) -> str:
-    if score >= 13:   return "#239B56"   # dark green – very high conviction
+    if score >= 13:   return "#239B56"   # dark green - very high conviction
     if score >= 10:   return "#A9DFBF"   # green
-    if score >= 7:    return "#FDFDA0"   # yellow – qualifies, less strong
+    if score >= 7:    return "#FDFDA0"   # yellow - qualifies, less strong
     return "#FDEBD0"
 
 def _llm_color(verdict: str | None) -> str:
@@ -262,7 +262,7 @@ def _llm_color(verdict: str | None) -> str:
     }.get(verdict or "SKIPPED", "#FFFFFF")
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# == Public API ================================================================
 
 def write(signals: list[dict], output_dir: str, scan_date: str | None = None) -> Path:
     """
@@ -289,11 +289,11 @@ def write(signals: list[dict], output_dir: str, scan_date: str | None = None) ->
     )
 
     with open(out_path, "w", encoding="utf-8") as fh:
-        # ── Head ──────────────────────────────────────────────────────────────
+        # == Head ==============================================================
         fh.write(_PAGE_HEAD.format(date=report_date, total=len(sorted_sigs)))
-        # ── Top Picks banner ────────────────────────────────────────────────
+        # == Top Picks banner ================================================
         fh.write(_build_top_picks_html(sorted_sigs, report_date))
-        # ── Rows ──────────────────────────────────────────────────────────────
+        # == Rows ==============================================================
         for sl, s in enumerate(sorted_sigs, 1):
             close    = s.get("close")
             rsi      = s.get("rsi")
@@ -309,7 +309,7 @@ def write(signals: list[dict], output_dir: str, scan_date: str | None = None) ->
             if high_52w and close and high_52w > 0:
                 near_high = f"{((high_52w - close) / high_52w * 100):.1f}%"
             else:
-                near_high = "–"
+                near_high = "-"
 
             fh.write(_ROW.format(
                 sl        = sl,
@@ -318,22 +318,22 @@ def write(signals: list[dict], output_dir: str, scan_date: str | None = None) ->
                 sig_c     = _signal_color(s.get("signal_type")),
                 stg       = s.get("stage", "?"),
                 stg_c     = _stage_color(s.get("stage")),
-                close     = f"{close:.2f}" if close is not None else "–",
-                rsi       = f"{rsi:.1f}"   if rsi   is not None else "–",
+                close     = f"{close:.2f}" if close is not None else "-",
+                rsi       = f"{rsi:.1f}"   if rsi   is not None else "-",
                 rsi_c     = _rsi_color(rsi),
-                vol       = f"{vol:.2f}x"  if vol   is not None else "–",
+                vol       = f"{vol:.2f}x"  if vol   is not None else "-",
                 vol_c     = _vol_color(vol),
-                atr       = f"{atr:.2f}"   if atr   is not None else "–",
+                atr       = f"{atr:.2f}"   if atr   is not None else "-",
                 near_high = near_high,
                 score     = score,
                 sc_c      = _score_color(score),
                 llm_v     = llm_v,
                 llm_c     = _llm_color(llm_v),
-                llm_conf  = f"{llm_conf}/10" if llm_conf is not None else "–",
-                reasoning = reasoning or "–",
+                llm_conf  = f"{llm_conf}/10" if llm_conf is not None else "-",
+                reasoning = reasoning or "-",
             ))
 
-        # ── Foot ──────────────────────────────────────────────────────────────
+        # == Foot ==============================================================
         fh.write(_PAGE_FOOT)
 
     return out_path

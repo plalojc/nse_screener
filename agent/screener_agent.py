@@ -1,6 +1,6 @@
-﻿
+
 # ============================================================
-# agent/screener_agent.py â€“ Main orchestrator
+# agent/screener_agent.py - Main orchestrator
 # ============================================================
 import pandas as pd
 from datetime import date, datetime, timedelta
@@ -82,7 +82,7 @@ def _mark_llm_not_selected(signals: list[dict], scan_date: str) -> None:
         sig["panel_method"] = "LOCAL_RANK_SKIP"
 
 
-# â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# == helpers ================================================================
 
 def _ensure_instruments(symbols: list):
     """
@@ -134,7 +134,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     5. Auto-open Stage2 positions for top signals
     """
     print(Fore.CYAN + "=" * 60)
-    print(Fore.CYAN + "   NSE BREAKOUT AGENT â€“ DAILY SCAN")
+    print(Fore.CYAN + "   NSE BREAKOUT AGENT - DAILY SCAN")
     print(Fore.CYAN + "=" * 60)
 
     target_date = _effective_scan_date(scan_date)
@@ -169,7 +169,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     print(f"  {n} new articles cached.")
 
     # 
-    # Load blacklist once here â€” used to pre-filter the universe before the loop
+    # Load blacklist once here - used to pre-filter the universe before the loop
     invalid_symbols = get_invalid_symbols()
 
     if symbols:
@@ -191,7 +191,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         print(f"  Universe: {len(universe)} NSE EQ instruments "
               f"({raw_count - len(universe)} blacklisted removed).")
 
-    # -------------------------------------------------- Step 3 – Scan universe --------------------------------------------------
+    # == Step 3: Scan universe =============================================
     signals     = []
     open_pos    = {p["symbol"] for p in get_open_positions()}
     total       = len(universe)
@@ -271,17 +271,17 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         for sig in signals:
             sig["scan_date"] = target_date
 
-    # â”€â”€ Step 5 â€“ Display & auto-enter top signals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == Step 5: Display and auto-enter top signals ========================
     print(Fore.YELLOW + f"\n[5/5] Results: {len(signals)} breakout candidate(s) found.")
     if signals:
-        # â”€â”€ Sort: CONFIRM first, then WEAK, then REJECT/SKIPPED; within each group by score â”€â”€
+        # Sort: CONFIRM first, then WEAK, then REJECT/SKIPPED; within each group by score.
         _verdict_order = {"CONFIRM": 0, "WEAK": 1, "REJECT": 2, "SKIPPED": 3}
         signals.sort(key=lambda x: (
             _verdict_order.get(x.get("llm_verdict", "SKIPPED"), 3),
             -x["score"]
         ))
 
-        # â”€â”€ LLM verdict summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # LLM verdict summary.
         from collections import Counter
         verdict_counts = Counter(s.get("llm_verdict", "SKIPPED") for s in signals)
         print(
@@ -293,9 +293,8 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             + Style.RESET_ALL + "  |  "
             + f"SKIPPED : {verdict_counts.get('SKIPPED', 0)}"
         )
-
-        # â”€â”€ Candidate table (all signals, CONFIRM at top) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        print(Fore.CYAN + f"\n{'â”€'*20} BREAKOUT CANDIDATES {'â”€'*20}")
+        
+        print(Fore.CYAN + f"\n{'=='*20} BREAKOUT CANDIDATES {'=='*20}")
         rows = []
         for s in signals:
             verdict = s.get("llm_verdict", "")
@@ -312,7 +311,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             rows.append([
                 s.get("signal_type", "BREAKOUT"),
                 s["symbol"],
-                f"â‚¹{s['close']}",
+                f"Rs.{s['close']}",
                 s["rsi"],
                 f"{s['vol_ratio']}x",
                 s["score"],
@@ -321,9 +320,9 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 s["reasons"][:45],
             ])
         headers = ["Type", "Symbol", "Price", "RSI", "Vol", "Score", "Stage", "LLM", "Reason"]
-        print("\n" + tabulate(rows, headers=headers, tablefmt="fancy_grid"))
+        print("\n" + tabulate(rows, headers=headers, tablefmt="grid"))
 
-        # â”€â”€ Auto-enter new positions (Stage2 + CONFIRM/WEAK only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Auto-enter new positions (Stage2 + CONFIRM/WEAK only) 
         open_count  = len(get_open_positions())
         slots_free  = MAX_OPEN_POSITIONS - open_count
         new_entries = 0
@@ -355,35 +354,35 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                 save_signal(sig["symbol"], "BUY", bp, sig["reasons"])
                 new_entries += 1
                 print(Fore.GREEN +
-                      f"  [BUY #{new_entries}] {sig['symbol']:<15} @ â‚¹{bp} "
-                      f"| Target â‚¹{tp} | SL â‚¹{sl} ({sl_method}) "
+                      f"  [BUY #{new_entries}] {sig['symbol']:<15} @ Rs.{bp} "
+                      f"| Target Rs.{tp} | SL Rs.{sl} ({sl_method}) "
                       f"| LLM: {sig.get('llm_verdict','?')}")
                 open_count = len(get_open_positions())
 
-    # â”€â”€ TOP PICKS â€“ the final actionable shortlist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == TOP PICKS: the final actionable shortlist =========================
     _print_top_picks(signals, target_date)
 
-    # â”€â”€ HTML Report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == HTML Report ========================================================
     if signals:
         try:
             html_path = write_html_report(signals, REPORT_DIR, target_date)
-            print(Fore.CYAN + f"\n  ðŸ“„ HTML report saved â†’ {html_path}")
+            print(Fore.CYAN + f"\n  HTML report saved -> {html_path}")
         except Exception as exc:
             print(Fore.YELLOW + f"  [WARN] Could not write HTML report: {exc}")
 
     return signals
 
 
-# â”€â”€ Top Picks helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# == Top Picks helper =======================================================
 
 def _print_top_picks(signals: list, scan_date: str):
     """
     From all signals, filter down to the highest-conviction swing trade setups:
-      â€¢ Stage2 (trending, not parabolic)
-      â€¢ LLM verdict = CONFIRM  (or WEAK as fallback when no CONFIRMs exist)
-      â€¢ Score >= TOP_PICKS_MIN_SCORE
-      â€¢ Vol ratio >= TOP_PICKS_MIN_VOL
-      â€¢ RSI <= TOP_PICKS_RSI_MAX  (not overbought)
+      - Stage2 (trending, not parabolic)
+      - LLM verdict = CONFIRM  (or WEAK as fallback when no CONFIRMs exist)
+      - Score >= TOP_PICKS_MIN_SCORE
+      - Vol ratio >= TOP_PICKS_MIN_VOL
+      - RSI <= TOP_PICKS_RSI_MAX  (not overbought)
     Ranked by: LLM confidence DESC then score DESC.
     """
     WIDTH = 62
@@ -418,8 +417,8 @@ def _print_top_picks(signals: list, scan_date: str):
     picks = picks[:TOP_PICKS_COUNT]
 
     print(Fore.GREEN + "\n" + border)
-    print(Fore.GREEN + f"  â˜…  TODAY'S TOP PICKS  â€”  {scan_date}  â˜…")
-    print(Fore.GREEN + f"  (Stage2 | LLM CONFIRM | Scoreâ‰¥{TOP_PICKS_MIN_SCORE} | Volâ‰¥{TOP_PICKS_MIN_VOL}x | RSIâ‰¤{TOP_PICKS_RSI_MAX})")
+    print(Fore.GREEN + f"  * TODAY'S TOP PICKS - {scan_date} *")
+    print(Fore.GREEN + f"  (Stage2 | LLM CONFIRM | Score>={TOP_PICKS_MIN_SCORE} | Vol>={TOP_PICKS_MIN_VOL}x | RSI<={TOP_PICKS_RSI_MAX})")
     print(Fore.GREEN + border + Style.RESET_ALL)
 
     if not picks:
@@ -450,11 +449,11 @@ def _print_top_picks(signals: list, scan_date: str):
             pattern_badges += " [FLAG]"
 
         print(verdict_colour +
-              f"  #{rank}  {s['symbol']:<12}  â‚¹{bp:<9.2f}  "
+              f"  #{rank}  {s['symbol']:<12}  Rs.{bp:<9.2f}  "
               f"Score:{s['score']}  RSI:{s['rsi']:.0f}  Vol:{s['vol_ratio']:.1f}x  "
               f"{_validator_name()}:{s.get('llm_verdict')}({conf}/10){pattern_badges}")
         print(Style.RESET_ALL +
-              f"      Entry â‚¹{bp:.2f}  â†’  Target â‚¹{tp:.2f}  â†’  SL â‚¹{sl:.2f}  "
+              f"      Entry Rs.{bp:.2f}  ->  Target Rs.{tp:.2f}  ->  SL Rs.{sl:.2f}  "
               f"(Risk {rr}% | 2R reward)")
         if reasoning:
             print(f"      Reasoning: {reasoning[:100]}")

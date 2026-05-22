@@ -4,8 +4,8 @@ report/backtest_report_writer.py
 Writes backtest validation results to an HTML file.
 
 The report contains:
-  1. A summary box  – win rate, total signals, avg gain/loss, expectancy
-  2. A full results table sorted by outcome (WIN → OPEN → LOSS), then max_gain_pct desc
+  1. A summary box  - win rate, total signals, avg gain/loss, expectancy
+  2. A full results table sorted by outcome (WIN -> OPEN -> LOSS), then max_gain_pct desc
 """
 
 from __future__ import annotations
@@ -13,19 +13,19 @@ from __future__ import annotations
 from pathlib import Path
 
 
-# ── HTML page templates ───────────────────────────────────────────────────────
+# == HTML page templates =======================================================
 
 _PAGE_HEAD = """\
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Backtest Validation – {signal_date}</title>
+    <title>Backtest Validation - {signal_date}</title>
     <style>
         body  {{ font-family: Arial, sans-serif; font-size: 13px; margin: 20px; background:#f4f6f8; }}
         h2    {{ color: #2c3e50; margin-bottom: 4px; }}
         p.sub {{ color: #666; margin-top: 0; font-size: 12px; }}
 
-        /* ── Summary box ───────────────────────────────────────────── */
+        /* == Summary box ============================================= */
         .summary {{
             display: flex; flex-wrap: wrap; gap: 12px;
             margin: 16px 0;
@@ -43,7 +43,7 @@ _PAGE_HEAD = """\
         .open {{ color: #2980b9; }}
         .neutral {{ color: #555; }}
 
-        /* ── Table ─────────────────────────────────────────────────── */
+        /* == Table =================================================== */
         table {{ border-collapse: collapse; width: 100%; background: white;
                  border-radius: 8px; overflow: hidden;
                  box-shadow: 0 1px 4px rgba(0,0,0,.06); }}
@@ -171,7 +171,7 @@ _ROW = (
     "</tr>\n"
 )
 
-# ── Colour helpers ────────────────────────────────────────────────────────────
+# == Colour helpers ============================================================
 
 def _signal_color(v):  return {"BREAKOUT":"#A9DFBF","PULLBACK":"#AED6F1"}.get(v,"#FFF")
 def _stage_color(v):   return {"Stage2":"#A9DFBF","Stage1":"#FDEBD0","Stage3":"#F5CBA7"}.get(v,"#FFF")
@@ -198,7 +198,7 @@ def _pct_color(v):
     return "#FFF"
 
 
-# ── Summary helpers ───────────────────────────────────────────────────────────
+# == Summary helpers ===========================================================
 
 def _compute_summary(results: list[dict]) -> dict:
     total  = len(results)
@@ -216,7 +216,7 @@ def _compute_summary(results: list[dict]) -> dict:
 
     # Average days to outcome (wins + losses only)
     decided = [r for r in results if r["outcome_day"] is not None]
-    avg_days = round(sum(r["outcome_day"] for r in decided) / len(decided), 1) if decided else "–"
+    avg_days = round(sum(r["outcome_day"] for r in decided) / len(decided), 1) if decided else "-"
 
     return {
         "total":      total,
@@ -233,7 +233,7 @@ def _compute_summary(results: list[dict]) -> dict:
     }
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# == Public API ================================================================
 
 def write(
     results: list[dict],
@@ -258,7 +258,7 @@ def write(
     out_path = Path(output_dir) / f"Backtest-{signal_date}-fwd{forward_days}d.html"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Sort: WIN first → OPEN → LOSS, then max_gain_pct desc within each group
+    # Sort: WIN first -> OPEN -> LOSS, then max_gain_pct desc within each group
     order = {"WIN": 0, "OPEN": 1, "LOSS": 2}
     sorted_results = sorted(
         results,
@@ -287,15 +287,15 @@ def write(
                 entry    = r["entry_price"],
                 tp       = r["target_price"],
                 stop     = r["stop_loss"],
-                rsi      = f"{rsi:.1f}" if rsi is not None else "–",
+                rsi      = f"{rsi:.1f}" if rsi is not None else "-",
                 rsi_c    = _rsi_color(rsi),
-                vol      = f"{vol:.2f}" if vol is not None else "–",
+                vol      = f"{vol:.2f}" if vol is not None else "-",
                 vol_c    = _vol_color(vol),
                 score    = r.get("score", 0),
                 sc_c     = _score_color(r.get("score", 0)),
                 outcome  = r["outcome"],
                 out_c    = _outcome_color(r["outcome"]),
-                day      = r["outcome_day"] if r["outcome_day"] else "–",
+                day      = r["outcome_day"] if r["outcome_day"] else "-",
                 max_gain = r.get("max_gain_pct", 0),
                 mg_c     = _pct_color(r.get("max_gain_pct", 0)),
                 max_dd   = r.get("max_dd_pct", 0),

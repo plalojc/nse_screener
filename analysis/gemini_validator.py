@@ -1,29 +1,29 @@
 
 # ============================================================
-# analysis/gemini_validator.py – Gemini Direct Validator
+# analysis/gemini_validator.py - Gemini Direct Validator
 # ============================================================
 # Replaces the multi-LLM panel with ONE focused Gemini call
 # + Google Search grounding per signal.
 #
 # Why better than the 4-agent panel for this use case:
-#   • 1 API call vs 4  →  4× less cost, latency, and noise
-#   • Google Search grounding  →  live NSE news, SEBI notices, events
-#   • Single coherent reasoning chain (no debate randomness)
-#   • Gemini 2.5 Flash: fast/free  |  Gemini 2.5 Pro: highest accuracy
+#   - 1 API call vs 4  ->  4x less cost, latency, and noise
+#   - Google Search grounding  ->  live NSE news, SEBI notices, events
+#   - Single coherent reasoning chain (no debate randomness)
+#   - Gemini 2.5 Flash: fast/free  |  Gemini 2.5 Pro: highest accuracy
 #
 # Pipeline position (replaces Step 4 in screener_agent.py):
-#   Rule-based scanner  →  Gemini Direct Validator  →  TOP PICKS
+#   Rule-based scanner  ->  Gemini Direct Validator  ->  TOP PICKS
 #
 # Because Gemini searches the web live, Steps 4b (Gemini sentiment)
 # and 4c (Claude live validation) are automatically skipped when
-# USE_GEMINI_VALIDATOR=true — they would be redundant.
+# USE_GEMINI_VALIDATOR=true - they would be redundant.
 #
 # Toggle : USE_GEMINI_VALIDATOR=true in .env
 # API key: GEMINI_VALIDATOR_API_KEY  (falls back to GEMINI_SENTIMENT_API_KEY)
 # Model  : GEMINI_VALIDATOR_MODEL    (default: gemini-2.5-flash)
 # Rate   : GEMINI_VALIDATOR_RATE_DELAY seconds between calls
-#          Free tier : 10 RPM  → set delay to 6.0
-#          Tier 1    : 150 RPM → set delay to 0.4
+#          Free tier : 10 RPM  -> set delay to 6.0
+#          Tier 1    : 150 RPM -> set delay to 0.4
 # ============================================================
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ if not logger.handlers:
     logger.setLevel(logging.WARNING)
 
 
-# ── Prompt ────────────────────────────────────────────────────────────────────
+# == Prompt ====================================================================
 
 def _build_prompt(sig: dict) -> str:
     close     = sig.get("close", 0) or 0
@@ -74,7 +74,7 @@ def _build_prompt(sig: dict) -> str:
     tp_pct    = round((tp - close) / close * 100, 1) if close else 0
 
     ema200_line = (
-        f"EMA200      : ₹{sig['ema200']:.2f}"
+        f"EMA200      : Rs.{sig['ema200']:.2f}"
         if sig.get("ema200") else "EMA200      : N/A"
     )
 
@@ -93,7 +93,7 @@ def _build_prompt(sig: dict) -> str:
     # Include RSS news headlines already fetched by the screener
     raw_news = sig.get("news") or []
     news_lines = "\n".join(
-        f"  • {item['title'] if isinstance(item, dict) else str(item)}"
+        f"  - {item['title'] if isinstance(item, dict) else str(item)}"
         for item in raw_news[:5]
     ) or "  None cached from RSS feeds."
 
@@ -101,35 +101,35 @@ def _build_prompt(sig: dict) -> str:
 You are a senior NSE India equity analyst. Validate the breakout signal below.
 Use Google Search to find LIVE news and events for {sig.get('symbol')} NSE India.
 
-═══ TECHNICAL SIGNAL (rule-based scanner) ════════════════════
+=== TECHNICAL SIGNAL (rule-based scanner) ====================
 Symbol      : {sig.get('symbol')}  |  Date: {sig.get('scan_date', 'today')}
 Signal      : {sig.get('signal_type', 'BREAKOUT')}  |  Stage: {sig.get('stage')}
-Score       : {sig.get('score', 0)}  (min to pass: 6; strong setup: ≥10)
-Close Price : ₹{close}
+Score       : {sig.get('score', 0)}  (min to pass: 6; strong setup: >=10)
+Close Price : Rs.{close}
 
 TREND & INDICATORS
-  EMA20      : ₹{sig.get('ema20') or 'N/A'}
-  EMA50      : ₹{sig.get('ema50') or 'N/A'}
+  EMA20      : Rs.{sig.get('ema20') or 'N/A'}
+  EMA50      : Rs.{sig.get('ema50') or 'N/A'}
   {ema200_line}
-  RSI (14)   : {sig.get('rsi') or 'N/A'}  (scanner range: 55–80; overbought >80)
-  Vol Ratio  : {sig.get('vol_ratio') or 'N/A'}x 20-day avg  (high conviction ≥1.8x)
-  ATR14      : ₹{atr14 or 'N/A'}
+  RSI (14)   : {sig.get('rsi') or 'N/A'}  (scanner range: 55-80; overbought >80)
+  Vol Ratio  : {sig.get('vol_ratio') or 'N/A'}x 20-day avg  (high conviction >=1.8x)
+  ATR14      : Rs.{atr14 or 'N/A'}
   MACD Hist  : {macd_desc}
   Supertrend : {st_desc}
-  Swing Low  : ₹{swing_low or 'N/A'}
+  Swing Low  : Rs.{swing_low or 'N/A'}
 
 TRADE SETUP
-  Entry      : ₹{close}
-  Stop Loss  : ₹{sl}  ({sl_pct}% below entry)
-  Target     : ₹{tp}  ({tp_pct}% above, 2:1 R:R)
+  Entry      : Rs.{close}
+  Stop Loss  : Rs.{sl}  ({sl_pct}% below entry)
+  Target     : Rs.{tp}  ({tp_pct}% above, 2:1 R:R)
 
 Scanner reasons: {sig.get('reasons', 'N/A')}
 
 CACHED RSS NEWS HEADLINES (pre-fetched, may be 1-2 days old):
 {news_lines}
-══════════════════════════════════════════════════════════════
+==============================================================
 
-SEARCH TASK — search for "{sig.get('symbol')} NSE India stock news site:economictimes.com OR site:moneycontrol.com OR site:business-standard.com OR site:nseindia.com"
+SEARCH TASK - search for "{sig.get('symbol')} NSE India stock news site:economictimes.com OR site:moneycontrol.com OR site:business-standard.com OR site:nseindia.com"
 Also search: "{sig.get('symbol')} NSE earnings results order SEBI 2026"
 
 Find (last 7 days):
@@ -140,10 +140,10 @@ Find (last 7 days):
   5. Analyst upgrades / downgrades / target price changes
   6. Sector-level news (policy, rate changes, peer results) affecting this stock
 
-IMPORTANT: If you find NO relevant news, say so honestly — do NOT hallucinate events.
+IMPORTANT: If you find NO relevant news, say so honestly - do NOT hallucinate events.
 
 BEFORE answering, also verify: is {sig.get('symbol')} a regular NSE equity share, or is it a non-equity instrument?
-Set "is_etf": true if it is ANY of the following — ETF, Index Fund, Liquid Fund, Debt Fund, Overnight Fund, Money Market Fund, Mutual Fund (any category), FoF (Fund of Funds), BeES product, Bond ETF, or any instrument that tracks an index/basket instead of being a single company stock.
+Set "is_etf": true if it is ANY of the following - ETF, Index Fund, Liquid Fund, Debt Fund, Overnight Fund, Money Market Fund, Mutual Fund (any category), FoF (Fund of Funds), BeES product, Bond ETF, or any instrument that tracks an index/basket instead of being a single company stock.
 Set "is_etf": false ONLY if it is a regular listed company (equity share) on NSE.
 
 Return ONLY a JSON object (no markdown, no prose):
@@ -157,11 +157,11 @@ Return ONLY a JSON object (no markdown, no prose):
 }}
 
 VERDICT RULES:
-  CONFIRM — Score ≥ 10, vol ≥ 1.8x, RSI 55–79, Stage2, AND no major negative news.
+  CONFIRM - Score >= 10, vol >= 1.8x, RSI 55-79, Stage2, AND no major negative news.
             Neutral news is fine; a positive catalyst strengthens conviction further.
-  WEAK    — Score 6–9, OR vol < 1.8x, OR RSI borderline (>75), OR no catalyst found,
+  WEAK    - Score 6-9, OR vol < 1.8x, OR RSI borderline (>75), OR no catalyst found,
             OR mixed/conflicting news. Setup exists but lacks full conviction.
-  REJECT  — Negative news found (SEBI probe, earnings miss, fraud, rating downgrade,
+  REJECT  - Negative news found (SEBI probe, earnings miss, fraud, rating downgrade,
             promoter selling, order cancellation) OR technicals broken (score < 6,
             RSI > 80, price extended far above EMA50).
 
@@ -169,7 +169,7 @@ Default: WEAK (confidence 5) when news search returns nothing relevant.
 """.strip()
 
 
-# ── JSON parser ───────────────────────────────────────────────────────────────
+# == JSON parser ===============================================================
 
 def _parse_json(text: str) -> Optional[dict]:
     if not text:
@@ -189,7 +189,7 @@ def _parse_json(text: str) -> Optional[dict]:
     return None
 
 
-# ── Async rate limiter ───────────────────────────────────────────────────────
+# == Async rate limiter =======================================================
 
 class _AsyncRateLimiter:
     """Sliding-window rate limiter: allows at most `rpm` calls per 60 s."""
@@ -210,7 +210,7 @@ class _AsyncRateLimiter:
             self._slots.append(time.monotonic())
 
 
-# ── Async single-signal API call ──────────────────────────────────────────────
+# == Async single-signal API call ==============================================
 
 async def _call_gemini_async(
     sig: dict,
@@ -250,8 +250,8 @@ async def _call_gemini_async(
                 if "401" in err or "403" in err or "permission" in err or "api_key" in err:
                     logger.error(
                         f"[GeminiValidator] AUTH ERROR for {symbol}: {e}\n"
-                        "  → Check GEMINI_VALIDATOR_API_KEY in .env\n"
-                        "  → https://aistudio.google.com/apikey"
+                        "  -> Check GEMINI_VALIDATOR_API_KEY in .env\n"
+                        "  -> https://aistudio.google.com/apikey"
                     )
                     return None  # no retry on auth errors
                 if "429" in err or "resource_exhausted" in err or "quota" in err:
@@ -277,7 +277,7 @@ async def _call_gemini_async(
         return None
 
 
-# ── Async batch orchestrator ──────────────────────────────────────────────────
+# == Async batch orchestrator ==================================================
 
 async def _validate_all_async(signals: list, scan_date: str) -> list:
     """Run all Gemini calls concurrently, bounded by RPM and CONCURRENCY."""
@@ -297,7 +297,7 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
     cache_count   = 0
     api_counter   = [0]  # mutable int shared across coroutines
 
-    # ── Print cache hits first (synchronously) ──────────────────────────────
+    # == Print cache hits first (synchronously) ==============================
     for sig in signals:
         sig["scan_date"] = scan_date
         symbol = sig.get("symbol", "?")
@@ -316,20 +316,20 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
                 v_str = Fore.YELLOW + verdict + conf_str + Style.RESET_ALL
             else:
                 v_str = verdict + conf_str
-            print(f"  [Gemini cached] {symbol:<15} → {v_str}")
+            print(f"  [Gemini cached] {symbol:<15} -> {v_str}")
 
     to_api    = [s for s in signals if s.get("symbol") not in verdict_cache]
     api_total = len(to_api)
 
-    # ── Concurrent processing ────────────────────────────────────────────────
+    # == Concurrent processing ================================================
     async def process_one(sig: dict) -> None:
         symbol = sig.get("symbol", "?")
         parsed = await _call_gemini_async(sig, client, sem, rate_lim)
 
         if parsed:
-            # ── ETF / Fund auto-blacklist ─────────────────────────────────────
+            # == ETF / Fund auto-blacklist =====================================
             # Covers: ETF, Index Fund, Liquid Fund, Debt Fund, Overnight Fund,
-            # Money Market Fund, FoF, BeES, Bond ETF — anything not a company stock.
+            # Money Market Fund, FoF, BeES, Bond ETF - anything not a company stock.
             if parsed.get("is_etf") is True:
                 add_invalid_instrument(
                     symbol=symbol,
@@ -346,7 +346,7 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
                     idx = api_counter[0]
                     print(
                         f"  [Gemini {idx:>3}/{api_total}] {symbol:<15} "
-                        + Fore.RED + "→ FUND BLACKLISTED" + Style.RESET_ALL
+                        + Fore.RED + "-> FUND BLACKLISTED" + Style.RESET_ALL
                     )
                 return
 
@@ -365,7 +365,7 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
         else:
             verdict    = "WEAK"
             confidence = 4
-            reasoning  = "Gemini API call failed — defaulting to WEAK"
+            reasoning  = "Gemini API call failed - defaulting to WEAK"
 
         sig["llm_verdict"]    = verdict
         sig["llm_confidence"] = confidence
@@ -383,7 +383,7 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
                 v_str = Fore.RED    + verdict + conf_str + Style.RESET_ALL
             else:
                 v_str = Fore.YELLOW + verdict + conf_str + Style.RESET_ALL
-            print(f"  [Gemini {idx:>3}/{api_total}] {symbol:<15} → {v_str}")
+            print(f"  [Gemini {idx:>3}/{api_total}] {symbol:<15} -> {v_str}")
 
     await asyncio.gather(*[process_one(sig) for sig in to_api])
 
@@ -391,19 +391,19 @@ async def _validate_all_async(signals: list, scan_date: str) -> list:
     return signals
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# == Public API ================================================================
 
 def validate_signals_gemini_direct(signals: list, scan_date: str) -> list:
     """
     Drop-in replacement for validate_signals_panel() / validate_signals_batch().
 
-    All signals are validated concurrently (asyncio.gather) — up to
+    All signals are validated concurrently (asyncio.gather) - up to
     GEMINI_VALIDATOR_CONCURRENCY calls in flight at once, throttled by a
     sliding-window rate limiter derived from GEMINI_VALIDATOR_RATE_DELAY.
 
     Speed comparison (20 signals, free tier 10 RPM):
       Before (sequential + sleep): ~200 s
-      After  (async concurrent)  :  ~70 s  (~3× faster)
+      After  (async concurrent)  :  ~70 s  (~3x faster)
     Paid Tier 1 (150 RPM, delay=0.4): near-instant regardless of signal count.
     """
     if not GEMINI_VALIDATOR_API_KEY:
@@ -421,9 +421,9 @@ def validate_signals_gemini_direct(signals: list, scan_date: str) -> list:
         return signals
 
     try:
-        from google import genai  # noqa: F401 — verify installed
+        from google import genai  # noqa: F401 - verify installed
     except ImportError:
-        print(Fore.RED + "\n[4/5] Gemini validation SKIPPED — google-genai not installed.")
+        print(Fore.RED + "\n[4/5] Gemini validation SKIPPED - google-genai not installed.")
         print(Fore.RED + "      Fix: pip install google-genai")
         for sig in signals:
             sig["scan_date"]      = scan_date
@@ -436,7 +436,7 @@ def validate_signals_gemini_direct(signals: list, scan_date: str) -> list:
 
     rpm = max(1, int(round(60.0 / GEMINI_VALIDATOR_RATE_DELAY)))
     print(
-        f"  [Gemini] Validating {len(signals)} signal(s) — "
+        f"  [Gemini] Validating {len(signals)} signal(s) - "
         f"concurrency={GEMINI_VALIDATOR_CONCURRENCY}, RPM={rpm}, "
         f"model={GEMINI_VALIDATOR_MODEL}"
     )

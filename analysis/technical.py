@@ -1,6 +1,6 @@
 
 # ============================================================
-# analysis/technical.py – Indicator computation (pandas-ta)
+# analysis/technical.py - Indicator computation (pandas-ta)
 # ============================================================
 import numpy as np
 import pandas as pd
@@ -25,7 +25,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["high"]   = pd.to_numeric(df["high"])
     df["low"]    = pd.to_numeric(df["low"])
 
-    # Trend – _safe() turns None into NaN Series when data is too short
+    # Trend - _safe() turns None into NaN Series when data is too short
     df["ema20"]  = _safe(ta.ema(df["close"], length=20),  df.index)
     df["ema50"]  = _safe(ta.ema(df["close"], length=50),  df.index)
     df["ema200"] = _safe(ta.ema(df["close"], length=200), df.index)
@@ -33,7 +33,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Momentum
     df["rsi"]    = _safe(ta.rsi(df["close"], length=14),  df.index)
 
-    # MACD – resolve column names dynamically (pandas_ta name format can vary)
+    # MACD - resolve column names dynamically (pandas_ta name format can vary)
     macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
     if macd is not None and not macd.empty:
         _cols = macd.columns.tolist()
@@ -46,7 +46,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         if _signal: df["macd_signal"] = macd[_signal]
         if _hist:   df["macd_hist"]   = macd[_hist]
 
-    # Bollinger Bands – resolve column names dynamically
+    # Bollinger Bands - resolve column names dynamically
     bb = ta.bbands(df["close"], length=20, std=2)
     if bb is not None and not bb.empty:
         _cols = bb.columns.tolist()
@@ -71,7 +71,7 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["high_52w"] = df["high"].rolling(252, min_periods=50).max()
     df["low_52w"]  = df["low"].rolling(252, min_periods=50).min()
 
-    # Supertrend (length=7, multiplier=3.0 — standard settings)
+    # Supertrend (length=7, multiplier=3.0 - standard settings)
     # Direction: 1 = bullish (price above line), -1 = bearish (price below line)
     st = ta.supertrend(df["high"], df["low"], df["close"], length=7, multiplier=3.0)
     if st is not None and not st.empty:

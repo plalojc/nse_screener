@@ -1,6 +1,6 @@
 
 # ============================================================
-# scheduler.py – APScheduler daily runner
+# scheduler.py - APScheduler daily runner
 # ============================================================
 from apscheduler.schedulers.blocking import BlockingScheduler
 from agent.screener_agent import run_daily_scan

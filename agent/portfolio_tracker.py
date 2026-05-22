@@ -1,6 +1,6 @@
 
 # ============================================================
-# agent/portfolio_tracker.py – Track open positions and exits
+# agent/portfolio_tracker.py - Track open positions and exits
 # ============================================================
 from data.database      import (get_open_positions, close_position,
                                  save_signal, update_trailing_stop)
@@ -26,12 +26,12 @@ def _get_current_price(symbol: str) -> float | None:
 def check_exit_signals():
     """
     For each open position check three exit conditions (in priority order):
-    1. PROFIT TARGET  – price reached fixed ceiling (+PROFIT_TARGET_PCT %)
-    2. TRAILING STOP  – price fell through the ATR-ratcheted trailing stop
-    3. TIME EXIT      – held longer than MAX_HOLD_DAYS
+    1. PROFIT TARGET - price reached fixed ceiling (+PROFIT_TARGET_PCT %)
+    2. TRAILING STOP - price fell through the ATR-ratcheted trailing stop
+    3. TIME EXIT - held longer than MAX_HOLD_DAYS
 
     The trailing stop is ratcheted up each run:
-        new_trail = current_price − ATR_TRAIL_MULTIPLIER × ATR14
+        new_trail = current_price - ATR_TRAIL_MULTIPLIER * ATR14
     It is only ever moved UP (database enforces this).
     """
     positions = get_open_positions()
@@ -55,7 +55,7 @@ def check_exit_signals():
 
         pnl_pct = (current_price - buy_price) / buy_price * 100
 
-        # ── Compute ATR14 from latest historical data (always needed for trailing stop) ─
+        # Compute ATR14 from latest historical data (always needed for trailing stop).
         df_ind = fetch_historical(symbol)
         atr14  = None
         if not df_ind.empty:
@@ -63,7 +63,7 @@ def check_exit_signals():
             atr_val = df_ind["atr14"].iloc[-1]
             atr14   = float(atr_val) if atr_val is not None and not pd.isna(atr_val) else None
 
-        # ── Ratchet trailing stop upward ────────────────────────────────────
+        # Ratchet trailing stop upward.
         if atr14 and atr14 > 0:
             new_trail = round(current_price - ATR_TRAIL_MULTIPLIER * atr14, 2)
             update_trailing_stop(symbol, new_trail)   # DB enforces no downward movement
@@ -79,15 +79,15 @@ def check_exit_signals():
         if atr14 and atr14 > 0:
             trail = max(trail, new_trail)
 
-        # ── Exit decision ────────────────────────────────────────────────────
+        # Exit decision.
         target_price = pos.get("target_price")
         reason = None
         if target_price and current_price >= target_price:
-            reason = f"TARGET HIT ₹{target_price:.2f} (+{pnl_pct:.1f}%)"
+            reason = f"TARGET HIT Rs.{target_price:.2f} (+{pnl_pct:.1f}%)"
         elif pnl_pct >= PROFIT_TARGET_PCT:
             reason = f"PROFIT TARGET +{pnl_pct:.1f}%"
         elif current_price <= trail:
-            reason = f"TRAILING STOP ₹{trail:.2f} (PnL {pnl_pct:+.1f}%)"
+            reason = f"TRAILING STOP Rs.{trail:.2f} (PnL {pnl_pct:+.1f}%)"
         elif days_held >= MAX_HOLD_DAYS:
             reason = f"MAX HOLD {days_held}d PnL={pnl_pct:+.1f}%"
 
@@ -101,7 +101,7 @@ def check_exit_signals():
                 "pnl_pct":    round(pnl_pct, 2),
                 "reason":     reason,
             })
-            print(f"[EXIT] {symbol} @ ₹{current_price:.2f}  {reason}")
+            print(f"[EXIT] {symbol} @ Rs.{current_price:.2f}  {reason}")
 
     return exits
 
@@ -124,15 +124,15 @@ def print_portfolio():
         pnl_str = f"{pnl:+.2f}%"
         rows.append([
             pos["symbol"],
-            f"₹{pos['buy_price']:.2f}",
-            f"₹{cmp:.2f}",
+            f"Rs.{pos['buy_price']:.2f}",
+            f"Rs.{cmp:.2f}",
             pnl_str,
             pos["buy_date"],
-            f"₹{pos['target_price']:.2f}",
-            f"₹{pos['stop_loss_price']:.2f}",
-            f"₹{trail:.2f}" if isinstance(trail, float) else trail,
+            f"Rs.{pos['target_price']:.2f}",
+            f"Rs.{pos['stop_loss_price']:.2f}",
+            f"Rs.{trail:.2f}" if isinstance(trail, float) else trail,
         ])
 
     headers = ["Symbol", "Buy", f"CMP ({market_status})", "PnL%",
                "Date", "Target", "Init SL", "Trail SL"]
-    print("\n" + tabulate(rows, headers=headers, tablefmt="fancy_grid"))
+    print("\n" + tabulate(rows, headers=headers, tablefmt="grid"))

@@ -1,6 +1,6 @@
 
 # ============================================================
-# analysis/breakout_scanner.py – Breakout + Pullback signal detection
+# analysis/breakout_scanner.py - Breakout + Pullback signal detection
 # ============================================================
 import pandas as pd
 from analysis.technical import add_indicators, get_stage
@@ -29,23 +29,23 @@ def _sl_from_atr_and_swing(close, atr14, swing_low):
     return max(candidates) if candidates else round(close * 0.95, 2)
 
 
-# ── Breakout Scanner ──────────────────────────────────────────────────────────
+# == Breakout Scanner ==========================================================
 
 def is_breakout(df: pd.DataFrame) -> dict | None:
     """
     Momentum / breakout signal.
     Scoring criteria (higher = more conviction):
-      1. 20-day price breakout + 2x volume surge  (+3)  ← upgraded
+      1. 20-day price breakout + 2x volume surge  (+3)  <- upgraded
          OR plain volume surge 1.5x               (+1)
-      2. RSI in momentum zone [55–75]             (+2)
+      2. RSI in momentum zone [55-75]             (+2)
       3. Price > EMA20 > EMA50 (trend alignment)  (+2)
-      4. MACD histogram crossover                 (+2/+4 if below zero line)  ← upgraded
+      4. MACD histogram crossover                 (+2/+4 if below zero line)  <- upgraded
       5. Bollinger Band upper breakout            (+2)
       6. Near 52-week high (within 3%)            (+3)
       7. EMA20/50 golden cross (last 5 days)      (+3)
-      8. Supertrend fresh bullish crossover       (+3)  ← NEW
-         OR Supertrend already bullish            (+1)  ← NEW
-      9. Price above EMA200 (macro bull filter)   (+1)  ← NEW (was unused)
+      8. Supertrend fresh bullish crossover       (+3)  <- NEW
+         OR Supertrend already bullish            (+1)  <- NEW
+      9. Price above EMA200 (macro bull filter)   (+1)  <- NEW (was unused)
     Minimum score to emit a signal: 6
     """
     if len(df) < 30:
@@ -67,8 +67,8 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
     score   = 0
     rsi     = last["rsi"]
 
-    # 1. Volume breakout – 20-day high + 1.8x volume = high conviction (+3)
-    #    Plain surge 1.5–1.79x = baseline (+1)
+    # 1. Volume breakout - 20-day high + 1.8x volume = high conviction (+3)
+    #    Plain surge 1.5-1.79x = baseline (+1)
     high_20d = last.get("high_20d")
     if high_20d and not pd.isna(high_20d) and close > high_20d and last["vol_ratio"] >= 1.8:
         score += 3
@@ -87,7 +87,7 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
         score += 2
         reasons.append("EMA20 > EMA50 bull alignment")
 
-    # 4. MACD crossover – upgraded: bonus when crossover is below zero line
+    # 4. MACD crossover - upgraded: bonus when crossover is below zero line
     macd_hist_now  = last.get("macd_hist", 0) or 0
     macd_hist_prev = prev.get("macd_hist", 1) or 1
     macd_val       = last.get("macd", 0)      or 0
@@ -109,7 +109,7 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
     high_52w = last.get("high_52w")
     if high_52w and not pd.isna(high_52w) and close >= 0.97 * high_52w:
         score += 3
-        reasons.append(f"Near 52W high ₹{high_52w:.2f}")
+        reasons.append(f"Near 52W high Rs.{high_52w:.2f}")
 
     # 7. EMA20/50 golden cross in last 5 days
     recent     = df.tail(5)
@@ -132,7 +132,7 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
             score += 1
             reasons.append("Supertrend bullish")
 
-    # 9. Price above EMA200 — macro bull filter (NEW, was computed but unused)
+    # 9. Price above EMA200 - macro bull filter (NEW, was computed but unused)
     ema200 = last.get("ema200")
     if ema200 is not None and not pd.isna(ema200) and close > ema200:
         score += 1
@@ -168,19 +168,19 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
     }
 
 
-# ── MA Pullback Scanner ───────────────────────────────────────────────────────
+# == MA Pullback Scanner =======================================================
 
 def is_ma_pullback(df: pd.DataFrame) -> dict | None:
     """
-    MA Pullback (buy-the-dip) signal — fundamentally different from a breakout.
-    All four conditions must be TRUE (no scoring — pass/fail):
+    MA Pullback (buy-the-dip) signal - fundamentally different from a breakout.
+    All four conditions must be TRUE (no scoring - pass/fail):
 
-      1. EMA50 > EMA200           → macro uptrend confirmed
-      2. Current Low  <= EMA50    → price dipped down to the 50 EMA (the dip)
-      3. Current Close > EMA50    → buyers defended the level (reversal candle)
-      4. RSI (14) < 45            → short-term oversold / beaten-down
+      1. EMA50 > EMA200           -> macro uptrend confirmed
+      2. Current Low  <= EMA50    -> price dipped down to the 50 EMA (the dip)
+      3. Current Close > EMA50    -> buyers defended the level (reversal candle)
+      4. RSI (14) < 45            -> short-term oversold / beaten-down
 
-    Stop loss: 1.5×ATR below close, tightened by swing low if available.
+    Stop loss: 1.5xATR below close, tightened by swing low if available.
     """
     if len(df) < 60:       # need enough history for EMA200 to be meaningful
         return None
@@ -204,7 +204,7 @@ def is_ma_pullback(df: pd.DataFrame) -> dict | None:
     rsi    = float(rsi)
 
     if not (MIN_PRICE <= close <= MAX_PRICE):  return None
-    if ema50 <= ema200:                         return None   # macro downtrend — skip
+    if ema50 <= ema200:                         return None   # macro downtrend - skip
     if not (low <= ema50 <= close):             return None   # must dip to & close above EMA50
     if rsi >= 45:                               return None   # not oversold enough
 
@@ -223,7 +223,7 @@ def is_ma_pullback(df: pd.DataFrame) -> dict | None:
         "close":       round(close, 2),
         "rsi":         round(rsi, 1),
         "vol_ratio":   round(vol_ratio, 2),
-        "score":       6,      # binary pass — all conditions met
+        "score":       6,      # binary pass - all conditions met
         "stage":       "Stage2",
         "reasons":     (f"50 EMA pullback | RSI={rsi:.0f} oversold | "
                         f"EMA50 defended | macro EMA50>{ema200:.0f}"),

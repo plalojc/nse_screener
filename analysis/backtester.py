@@ -1,7 +1,7 @@
 """
 analysis/backtester.py
 ======================
-Backtesting engine – validates past breakout signals against real subsequent price action.
+Backtesting engine - validates past breakout signals against real subsequent price action.
 
 Usage
 -----
@@ -17,13 +17,13 @@ How it works
     live screener.
 5.  Forward candles (from signal_date+1 to signal_date+forward_days) are loaded from the DB.
 6.  Each forward trading day is walked:
-      - intraday HIGH >= target  → WIN  (triggered on that day)
-      - intraday LOW  <= SL      → LOSS (triggered on that day)
-      - neither within window    → OPEN
+      - intraday HIGH >= target  -> WIN  (triggered on that day)
+      - intraday LOW  <= SL      -> LOSS (triggered on that day)
+      - neither within window    -> OPEN
 7.  Additional stats recorded per signal:
-      max_gain_pct  – best intraday high vs entry, as %
-      max_dd_pct    – worst intraday low vs entry, as %  (negative = drawdown)
-      final_pct     – % change of last available close vs entry
+      max_gain_pct  - best intraday high vs entry, as %
+      max_dd_pct    - worst intraday low vs entry, as %  (negative = drawdown)
+      final_pct     - % change of last available close vs entry
 
 Returns
 -------
@@ -46,7 +46,7 @@ from data.nse_bhavcopy_client import (
 )
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# == Public API ================================================================
 
 def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
     """
@@ -55,8 +55,8 @@ def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
 
     Parameters
     ----------
-    signal_date  : str  – "YYYY-MM-DD"
-    forward_days : int  – how many calendar days forward to look for outcome
+    signal_date  : str  - "YYYY-MM-DD"
+    forward_days : int  - how many calendar days forward to look for outcome
 
     Returns
     -------
@@ -75,21 +75,21 @@ def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
         return []
 
     print(f"  {total} symbols in DB with data up to {signal_date}")
-    print(f"  Scanning for signals on {signal_date} → evaluating until {end_date} ...\n")
+    print(f"  Scanning for signals on {signal_date} -> evaluating until {end_date} ...\n")
 
     results = []
 
     for i, symbol in enumerate(symbols, 1):
         print(f"\r  [{i:>4}/{total}] {symbol:<20}", end="", flush=True)
 
-        # ── 1. Load history capped at signal_date (no future leakage) ────────
+        # == 1. Load history capped at signal_date (no future leakage) ========
         df = load_ohlcv_upto(symbol, signal_date)
-        if len(df) < 30:          # is_breakout needs ≥30; is_ma_pullback needs ≥60 (self-checked)
+        if len(df) < 30:          # is_breakout needs >=30; is_ma_pullback needs >=60 (self-checked)
             continue
 
-        # ── 2. Detect signals using the same scanners as the live screener ──
+        # == 2. Detect signals using the same scanners as the live screener ==
         #    Run BOTH scanners (mirrors screener_agent.py which collects all
-        #    signals in a loop — a symbol can produce BREAKOUT + PULLBACK).
+        #    signals in a loop - a symbol can produce BREAKOUT + PULLBACK).
         sigs_found = []
         for scanner in (is_breakout, is_ma_pullback):
             sig = scanner(df)
@@ -99,11 +99,11 @@ def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
         if not sigs_found:
             continue
 
-        # ── 4. Load forward candles (shared for all signals on this symbol) ──
+        # == 4. Load forward candles (shared for all signals on this symbol) ==
         fwd = load_ohlcv_range(symbol, signal_date, end_date)
 
         for sig in sigs_found:
-            # ── 3. Compute SL and 2R target (mirrors screener_agent.py) ─────
+            # == 3. Compute SL and 2R target (mirrors screener_agent.py) =====
             bp  = sig["close"]
             atr = sig.get("atr14") or 0
 
@@ -114,7 +114,7 @@ def run_backtest(signal_date: str, forward_days: int = 30) -> list[dict]:
             risk     = bp - sl
             tp       = round(bp + risk * 2, 2)
 
-            # ── 5. Walk forward day-by-day ────────────────────────────────────
+            # == 5. Walk forward day-by-day ====================================
             outcome     = "OPEN"
             outcome_day = None
             max_high    = bp     # track best intraday high

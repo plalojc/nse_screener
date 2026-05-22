@@ -1,10 +1,10 @@
 
 # ============================================================
-# analysis/pattern_scanner.py – Advanced chart pattern detection
+# analysis/pattern_scanner.py - Advanced chart pattern detection
 # ============================================================
 # Detects two institutional-grade patterns on top of existing indicators:
-#   1. VCP  – Volatility Contraction Pattern (Mark Minervini method)
-#   2. Bull Flag – Classic pole-and-flag continuation pattern
+#   1. VCP  - Volatility Contraction Pattern (Mark Minervini method)
+#   2. Bull Flag - Classic pole-and-flag continuation pattern
 #
 # Both operate on the OHLCV DataFrame already enriched by add_indicators().
 # Zero LLM calls; pure pandas/numpy (~5ms per symbol).
@@ -15,7 +15,7 @@ import pandas as pd
 from typing import Optional, Dict, Any
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# == Internal helpers ==========================================================
 
 def _ema_slope_pct(series: pd.Series, n: int = 10) -> float:
     """% change of last value vs n-bars-ago value. Positive = rising."""
@@ -58,11 +58,11 @@ def _segment_into_weekly_groups(df: pd.DataFrame, lookback: int = 60) -> list:
     return groups
 
 
-# ── VCP Detector ──────────────────────────────────────────────────────────────
+# == VCP Detector ==============================================================
 
 def detect_vcp(df: pd.DataFrame, min_contractions: int = 3) -> Optional[Dict[str, Any]]:
     """
-    VCP (Volatility Contraction Pattern) – Mark Minervini method.
+    VCP (Volatility Contraction Pattern) - Mark Minervini method.
 
     Returns a result dict if the pattern is valid, or None if not detected.
 
@@ -85,7 +85,7 @@ def detect_vcp(df: pd.DataFrame, min_contractions: int = 3) -> Optional[Dict[str
 
     ema50_slope = _ema_slope_pct(df["ema50"], n=10)
     if ema50_slope < 0:
-        return None   # EMA50 declining — no uptrend
+        return None   # EMA50 declining - no uptrend
 
     groups = _segment_into_weekly_groups(df, lookback=60)
     if len(groups) < min_contractions + 1:
@@ -144,7 +144,7 @@ def detect_vcp(df: pd.DataFrame, min_contractions: int = 3) -> Optional[Dict[str
     current_vol = df["volume"].iloc[-1]
     vol_at_breakout = round(current_vol / contraction_vol_avg, 2) if contraction_vol_avg > 0 else 0
     if vol_at_breakout < 1.5:
-        return None   # weak-volume breakout — skip
+        return None   # weak-volume breakout - skip
 
     # Quality score (0-10)
     vcp_score = 4   # base for meeting all conditions
@@ -171,7 +171,7 @@ def detect_vcp(df: pd.DataFrame, min_contractions: int = 3) -> Optional[Dict[str
     }
 
 
-# ── Bull Flag Detector ────────────────────────────────────────────────────────
+# == Bull Flag Detector ========================================================
 
 def detect_bull_flag(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     """
@@ -180,11 +180,11 @@ def detect_bull_flag(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     Returns a result dict if pattern is valid, or None if not detected.
 
     Conditions:
-    1. Pole: ≥10% gain in ≤10 bars, at least 1 bar with vol_ratio ≥ 1.5x
-    2. Flag: 3–10 bars after pole with retracement ≤ 50% of pole height,
+    1. Pole: >=10% gain in <=10 bars, at least 1 bar with vol_ratio >= 1.5x
+    2. Flag: 3-10 bars after pole with retracement <= 50% of pole height,
              declining volume, flat-to-downward price slope
-    3. Breakout: current close > pole_high AND current vol ≥ 1.5x flag avg vol
-    4. RSI 50–75, price > EMA20, pole started above EMA50
+    3. Breakout: current close > pole_high AND current vol >= 1.5x flag avg vol
+    4. RSI 50-75, price > EMA20, pole started above EMA50
     """
     if len(df) < 25:
         return None
@@ -263,7 +263,7 @@ def detect_bull_flag(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     flag_retracement = (pole_high - flag_low) / pole_height * 100
 
     if flag_retracement > 50:
-        return None   # too deep — not a clean flag
+        return None   # too deep - not a clean flag
 
     # Flag volume should contract vs pole volume
     pole_slice      = df.iloc[best_pole["pole_start_idx"]: best_pole["pole_end_idx"] + 1]
@@ -273,7 +273,7 @@ def detect_bull_flag(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     if vol_contraction >= 1.0:
         return None   # volume not contracting
 
-    # Flag slope: linear regression of closes during flag — should be <= 0 (flat or down)
+    # Flag slope: linear regression of closes during flag - should be <= 0 (flat or down)
     flag_closes = flag_slice["close"].values
     if len(flag_closes) >= 2:
         x = np.arange(len(flag_closes))
@@ -334,7 +334,7 @@ def detect_bull_flag(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     }
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# == Public API ================================================================
 
 def scan_advanced_patterns(df: pd.DataFrame) -> Dict[str, Any]:
     """
@@ -375,7 +375,7 @@ def scan_advanced_patterns(df: pd.DataFrame) -> Dict[str, Any]:
     if vcp:
         parts.append(
             f"VCP DETECTED: {vcp['contraction_count']} contractions, "
-            f"depth {vcp['vcp_depth_pct']}%, pivot ₹{vcp['pivot_high']}, "
+            f"depth {vcp['vcp_depth_pct']}%, pivot Rs.{vcp['pivot_high']}, "
             f"vol at breakout {vcp['volume_at_breakout']}x, "
             f"VCP score {vcp['vcp_score']}/10"
         )

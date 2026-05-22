@@ -1,6 +1,6 @@
-﻿
+
 # ============================================================
-# data/database.py â€“ SQLite layer
+# data/database.py - SQLite layer
 # ============================================================
 import sqlite3
 import pandas as pd
@@ -18,7 +18,7 @@ def init_db():
     conn = get_conn()
     cur  = conn.cursor()
 
-    # â”€â”€ instruments: master symbol reference table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == instruments: master symbol reference table ========================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS instruments (
             symbol          TEXT PRIMARY KEY,
@@ -27,7 +27,7 @@ def init_db():
         )
     """)
 
-    # â”€â”€ ohlcv: price data only; symbol FK â†’ instruments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # == ohlcv: price data only; symbol FK -> instruments ==================
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ohlcv (
             symbol  TEXT REFERENCES instruments(symbol),
@@ -134,7 +134,7 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
-    # â”€â”€ invalid_instruments: persistent blacklist of ETFs & no-data symbols â”€â”€â”€â”€
+    # == invalid_instruments: persistent blacklist of ETFs and no-data symbols
     cur.execute("""
         CREATE TABLE IF NOT EXISTS invalid_instruments (
             symbol   TEXT PRIMARY KEY,
@@ -313,7 +313,7 @@ def reset_positions():
 
 def update_trailing_stop(symbol: str, new_trail: float):
     """
-    Ratchet the trailing stop UP only â€” never move it down.
+    Ratchet the trailing stop UP only == never move it down.
     Uses a single SQL conditional update to avoid a race condition.
     """
     conn = get_conn()
@@ -347,7 +347,7 @@ def close_position(symbol, exit_price, pnl_pct):
     conn.close()
 
 
-# â”€â”€ Breakout Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# == Breakout Log ===========================================================
 
 def get_llm_verdict_cache(
     scan_date: str,
@@ -471,10 +471,10 @@ def save_breakout_log(scan_date: str, sig: dict):
     conn.commit()
     conn.close()
 
-# â”€â”€ Invalid Instruments Blacklist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# == Invalid Instruments Blacklist =========================================
 
 def add_invalid_instrument(symbol: str, reason: str, source: str) -> None:
-    """Add a single symbol to the blacklist (INSERT OR IGNORE â€“ safe to call repeatedly)."""
+    """Add a single symbol to the blacklist (INSERT OR IGNORE - safe to call repeatedly)."""
     conn = get_conn()
     conn.execute(
         "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source) VALUES (?, ?, ?)",
@@ -487,7 +487,7 @@ def add_invalid_instrument(symbol: str, reason: str, source: str) -> None:
 def bulk_add_invalid_instruments(rows: list) -> int:
     """Bulk-insert symbols into the blacklist.
     Each element must be a dict with keys: symbol, reason, source.
-    Uses INSERT OR IGNORE â€” safe to re-run every scan (duplicates are skipped).
+    Uses INSERT OR IGNORE - safe to re-run every scan (duplicates are skipped).
     Returns the number of newly inserted rows."""
     if not rows:
         return 0
