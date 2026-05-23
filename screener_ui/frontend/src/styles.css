@@ -614,7 +614,7 @@ th {
   pointer-events: none;
 }
 
-.plTable tbody tr:hover .plDeleteBtn {
+.plTable td.pnlCol:hover .plDeleteBtn {
   opacity: 1;
   pointer-events: auto;
 }
