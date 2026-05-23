@@ -18,6 +18,14 @@ function isAutoReportNote(notes) {
   return /^Added from report \d{4}-\d{2}-\d{2}$/.test(String(notes || "").trim());
 }
 
+function gainLossText(item) {
+  if (item.profit_loss === null || item.profit_loss === undefined) return "-";
+  const pct = item.profit_loss_pct === null || item.profit_loss_pct === undefined
+    ? ""
+    : ` (${item.profit_loss_pct}%)`;
+  return `${money(item.profit_loss)}${pct}`;
+}
+
 export function Watchlist() {
   const { data, error, refresh } = useLoad(() => api("/api/watchlist"), []);
   const { data: settings } = useLoad(() => api("/api/settings"), []);
@@ -159,9 +167,12 @@ export function Watchlist() {
               <tr>
                 <th className="slCol">SL</th>
                 <th>Symbol</th>
+                <th>Added Price</th>
+                <th>Latest Price</th>
+                <th>Gain/Loss</th>
                 <th>Target</th>
                 <th>Notes</th>
-                <th>Updated</th>
+                <th>Created</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -190,9 +201,20 @@ export function Watchlist() {
                       <ExternalLink size={13} />
                     </button>
                   </td>
+                  <td title={item.added_price_date ? `Added price date: ${item.added_price_date}` : ""}>
+                    {money(item.added_price)}
+                  </td>
+                  <td title={item.price_date ? `Latest price date: ${item.price_date}` : ""}>
+                    {money(item.current_price)}
+                  </td>
+                  <td>
+                    <span className={(item.profit_loss || 0) >= 0 ? "gain" : "loss"}>
+                      {gainLossText(item)}
+                    </span>
+                  </td>
                   <td>{money(item.target_price)}</td>
                   <td>{isAutoReportNote(item.notes) ? <span className="mutedText">{item.notes}</span> : (item.notes || "-")}</td>
-                  <td>{item.updated_at || "-"}</td>
+                  <td>{item.created_at || "-"}</td>
                   <td>
                     <div className="rowActions">
                       <button type="button" className="smallBtn actionBtn" onClick={() => startEdit(item)}>
@@ -205,7 +227,7 @@ export function Watchlist() {
                   </td>
                 </tr>
               )) : (
-                <tr><td colSpan="6">No records.</td></tr>
+                <tr><td colSpan="9">No records.</td></tr>
               )}
             </tbody>
           </table>

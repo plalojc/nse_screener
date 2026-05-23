@@ -48,10 +48,14 @@ def init_store() -> None:
                 symbol TEXT NOT NULL UNIQUE,
                 notes TEXT,
                 target_price REAL,
+                added_price REAL,
+                added_price_date TEXT,
                 created_at {now_default},
                 updated_at {now_default}
             )
         """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        _add_column(conn, T_WATCHLIST, "added_price", "REAL")
+        _add_column(conn, T_WATCHLIST, "added_price_date", "TEXT")
         execute(conn, f"""
             CREATE TABLE IF NOT EXISTS {T_HOLDINGS} (
                 id INTEGER PRIMARY KEY,
@@ -93,28 +97,43 @@ def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def _add_column(conn, table: str, col: str, typedef: str) -> None:
+    try:
+        execute(conn, f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typedef}")
+    except Exception:
+        try:
+            execute(conn, f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+        except Exception:
+            pass
+
+
 def add_watchlist(symbol: str, notes: str = "", target_price: float | None = None) -> dict:
     symbol = symbol.strip().upper()
+    price = latest_prices([symbol]).get(symbol)
+    added_price = price["close"] if price else None
+    added_price_date = price["date"] if price else None
     with _connect() as conn:
         existing = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
         if existing:
             row = existing
         else:
             execute(conn, f"""
-                INSERT INTO {T_WATCHLIST} (symbol, notes, target_price, updated_at)
-                VALUES (?, ?, ?, datetime('now'))
-            """, (symbol, notes.strip(), target_price))
+                INSERT INTO {T_WATCHLIST}
+                    (symbol, notes, target_price, added_price, added_price_date, updated_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
+            """, (symbol, notes.strip(), target_price, added_price, added_price_date))
             row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
         conn.commit()
     result = _row_to_dict(row) or {}
     result["created"] = not bool(existing)
-    return result
+    return enrich_watchlist(result)
 
 
 def list_watchlist() -> list[dict]:
+    backfill_watchlist_added_prices()
     with _connect() as conn:
-        rows = execute(conn, f"SELECT * FROM {T_WATCHLIST} ORDER BY updated_at DESC, symbol").fetchall()
-    return [dict(row) for row in rows]
+        rows = execute(conn, f"SELECT * FROM {T_WATCHLIST} ORDER BY created_at DESC, symbol").fetchall()
+    return enrich_watchlist_rows([dict(row) for row in rows])
 
 
 def update_watchlist(item_id: int, payload: dict[str, Any]) -> dict | None:
@@ -124,19 +143,19 @@ def update_watchlist(item_id: int, payload: dict[str, Any]) -> dict | None:
         if is_postgres():
             row = execute(conn, f"""
                 UPDATE {T_WATCHLIST}
-                SET notes=?, target_price=?, updated_at=datetime('now')
+                SET notes=?, target_price=?
                 WHERE id=?
                 RETURNING *
             """, (notes, target_price, item_id)).fetchone()
         else:
             execute(conn, f"""
                 UPDATE {T_WATCHLIST}
-                SET notes=?, target_price=?, updated_at=datetime('now')
+                SET notes=?, target_price=?
                 WHERE id=?
             """, (notes, target_price, item_id))
             row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE id=?", (item_id,)).fetchone()
         conn.commit()
-    return _row_to_dict(row)
+    return enrich_watchlist(_row_to_dict(row) or {}) if row else None
 
 
 def delete_watchlist(item_id: int) -> None:
@@ -151,6 +170,32 @@ def clear_watchlist() -> int:
         deleted = getattr(cur, "rowcount", 0)
         conn.commit()
     return deleted
+
+
+def backfill_watchlist_added_prices() -> None:
+    with _connect() as conn:
+        try:
+            rows = execute(conn, f"""
+                SELECT id, symbol
+                FROM {T_WATCHLIST}
+                WHERE added_price IS NULL
+            """).fetchall()
+        except Exception:
+            return
+        missing = [dict(row) for row in rows]
+        if not missing:
+            return
+        prices = latest_prices([row["symbol"] for row in missing])
+        for row in missing:
+            price = prices.get(row["symbol"])
+            if not price:
+                continue
+            execute(conn, f"""
+                UPDATE {T_WATCHLIST}
+                SET added_price=?, added_price_date=?
+                WHERE id=?
+            """, (price["close"], price["date"], row["id"]))
+        conn.commit()
 
 
 def add_holding(symbol: str, buy_date: str, quantity: float, buy_price: float, notes: str = "") -> dict:
@@ -344,6 +389,35 @@ def latest_prices(symbols: list[str] | None = None) -> dict[str, dict[str, Any]]
         row["symbol"]: {"date": row["date"], "close": row["close"]}
         for row in df.to_dict("records")
     }
+
+
+def enrich_watchlist(row: dict[str, Any]) -> dict[str, Any]:
+    if not row:
+        return row
+    return enrich_watchlist_rows([row])[0]
+
+
+def enrich_watchlist_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    symbols = [str(row.get("symbol") or "").upper() for row in rows if row.get("symbol")]
+    prices = latest_prices(symbols)
+    for row in rows:
+        symbol = str(row.get("symbol") or "").upper()
+        price = prices.get(symbol)
+        current_price = price["close"] if price else None
+        added_price = row.get("added_price")
+        row["current_price"] = current_price
+        row["price_date"] = price["date"] if price else None
+        if current_price is None or added_price in (None, ""):
+            row["profit_loss"] = None
+            row["profit_loss_pct"] = None
+            continue
+        added = float(added_price)
+        pnl = round(float(current_price) - added, 2)
+        row["profit_loss"] = pnl
+        row["profit_loss_pct"] = round(pnl / added * 100, 2) if added else None
+    return rows
 
 
 def enrich_holding(row: dict[str, Any]) -> dict[str, Any]:
