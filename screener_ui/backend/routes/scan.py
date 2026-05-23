@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -20,26 +21,45 @@ class ScanRequest(BaseModel):
     force_refresh: bool = False
 
 
+def _effective_report_date(scan_date: str | None) -> str:
+    if scan_date:
+        target = datetime.strptime(scan_date, "%Y-%m-%d").date()
+    else:
+        now = datetime.now()
+        target = date.today() if now.hour >= 17 else date.today() - timedelta(days=1)
+
+    today = date.today()
+    if target >= today and datetime.now().hour < 17:
+        target = today - timedelta(days=1)
+
+    while target.weekday() >= 5:
+        target -= timedelta(days=1)
+    return target.isoformat()
+
+
 @router.post("/run")
 def run_scan(payload: ScanRequest) -> dict[str, Any]:
-    if payload.scan_date and report_exists(payload.scan_date):
+    effective_date = _effective_report_date(payload.scan_date)
+    if report_exists(effective_date):
         return {
             "id": None,
             "status": "skipped",
             "progress": 100,
-            "message": f"Report already exists for {payload.scan_date}. Delete that report before running the scan again.",
+            "message": f"Report already exists for {effective_date}. Delete that report before running the scan again.",
             "started_at": None,
             "ended_at": None,
             "exit_code": 0,
             "lines": [
-                f"Report already exists for {payload.scan_date}.",
+                f"Requested date: {payload.scan_date or effective_date}.",
+                f"Effective trading date: {effective_date}.",
+                f"Report already exists for {effective_date}.",
                 "Delete the existing report from Reports page before running this scan again.",
             ],
             "command": [],
             "existing_report": {
-                "date": payload.scan_date,
+                "date": effective_date,
                 "kind": "scan",
-                "filename": f"NSE-Breakout-{payload.scan_date}.html",
+                "filename": f"NSE-Breakout-{effective_date}.html",
             },
         }
     job = jobs.start_scan(scan_date=payload.scan_date, force_refresh=payload.force_refresh)

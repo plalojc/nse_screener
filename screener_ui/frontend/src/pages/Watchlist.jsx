@@ -3,6 +3,7 @@ import { Edit3, ExternalLink, Plus, Save, Trash2, X } from "lucide-react";
 import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { Toast } from "../components/Toast.jsx";
 import { useLoad } from "../hooks/useLoad.js";
 import { money } from "../utils/format.js";
 import { openTradingView } from "../utils/tradingview.js";
@@ -144,7 +145,7 @@ export function Watchlist() {
         action={<button className="iconDanger" onClick={clearAll}><Trash2 size={16} />Clear</button>}
       />
       {error && <Notice tone="danger">{error}</Notice>}
-      {message && <Notice>{message}</Notice>}
+      <Toast message={message} onClose={() => setMessage("")} />
       <div className="panel">
         <form className="inlineForm" onSubmit={save}>
           <input placeholder="Symbol" value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} required />

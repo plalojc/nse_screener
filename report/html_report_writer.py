@@ -45,6 +45,7 @@ _PAGE_HEAD = """\
     <meta charset="UTF-8">
     <title>NSE Breakout Report - {date}</title>
     <style>
+        html, body {{ max-width:100%; overflow-x:hidden; }}
         body  {{ font-family: Arial, sans-serif; font-size: 12px; margin: 14px; color:#182230; background:#f8fafc; }}
         h2    {{ color: #26364a; font-size:20px; margin:0 0 14px; }}
         h3    {{ color:#111827; font-size:16px; margin:14px 0 10px; }}
@@ -58,16 +59,16 @@ _PAGE_HEAD = """\
         td.symbol {{ font-weight:700; letter-spacing:0; }}
         td.reason {{ text-align: left; color: #3f4a5a; max-width: 260px; position:relative; }}
         .reasonPreview {{ display:block; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-        .reasonFull {{ display:none; position:absolute; left:8px; top:calc(100% + 4px); z-index:20; width:360px; background:#111827; color:white; border-radius:4px; padding:9px 10px; box-shadow:0 10px 28px rgba(0,0,0,.25); line-height:1.35; }}
+        .reasonFull {{ display:none; position:fixed; right:16px; bottom:16px; z-index:20; width:min(420px, calc(100vw - 32px)); background:#111827; color:white; border-radius:4px; padding:9px 10px; box-shadow:0 10px 28px rgba(0,0,0,.25); line-height:1.35; text-align:left; }}
         td.reason:hover .reasonFull {{ display:block; }}
         td.newsReason:hover .reasonFull {{ display:none; }}
         .newsSummary {{ align-items:center; color:#7c2d12; cursor:pointer; display:flex; gap:7px; max-width:250px; min-height:22px; text-decoration:none; }}
         .newsSummary:hover .newsText {{ color:#9a3412; text-decoration:underline; }}
         .newsPill {{ background:#fff1e8; border:1px solid #fed7aa; border-radius:999px; color:#9a3412; flex:0 0 auto; font-size:10px; font-weight:700; padding:2px 6px; text-transform:uppercase; }}
         .newsText {{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-        td.slCell {{ min-width:40px; position:relative; width:44px; }}
+        td.slCell {{ min-width:48px; position:relative; width:52px; }}
         .slNo {{ display:inline-block; }}
-        .watch-btn {{ align-items:center; background:#1f6f54; border:1px solid #145c42; border-radius:50%; color:white; cursor:pointer; display:none; font-size:16px; font-weight:700; height:24px; justify-content:center; line-height:20px; padding:0; width:24px; }}
+        .watch-btn {{ align-items:center; background:#1f6f54; border:1px solid #145c42; border-radius:50%; color:white; cursor:pointer; display:none; font-size:16px; font-weight:700; height:24px; justify-content:center; left:50%; line-height:20px; padding:0; position:absolute; top:50%; transform:translate(-50%,-50%); width:24px; }}
         tr:hover .slCell .slNo {{ display:none; }}
         tr:hover .slCell .watch-btn {{ display:inline-flex; }}
         .watch-btn.added {{ background:#145c42; font-size:11px; width:42px; border-radius:12px; }}

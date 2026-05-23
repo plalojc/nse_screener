@@ -3,6 +3,7 @@ import { Check, Edit3, ExternalLink, Plus, Save, X } from "lucide-react";
 import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { Toast } from "../components/Toast.jsx";
 import { useLoad } from "../hooks/useLoad.js";
 import { money, number } from "../utils/format.js";
 import { openTradingView } from "../utils/tradingview.js";
@@ -149,7 +150,7 @@ export function Holdings() {
     <section>
       <PageTitle title="Holdings" />
       {error && <Notice tone="danger">{error}</Notice>}
-      {message && <Notice>{message}</Notice>}
+      <Toast message={message} onClose={() => setMessage("")} />
       <div className="panel">
         <form className="holdingForm" onSubmit={save}>
           <input placeholder="Symbol" value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} required />
