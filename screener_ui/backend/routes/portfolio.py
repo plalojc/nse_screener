@@ -8,11 +8,14 @@ from pydantic import BaseModel, Field
 from ..store import (
     add_holding,
     add_watchlist,
+    clear_watchlist,
     delete_holding,
     delete_watchlist,
     list_holdings,
     list_watchlist,
+    sell_holding,
     update_holding,
+    update_watchlist,
 )
 
 
@@ -30,6 +33,13 @@ class HoldingRequest(BaseModel):
     buy_date: str
     quantity: float = Field(gt=0)
     buy_price: float = Field(gt=0)
+    notes: str = ""
+
+
+class SellHoldingRequest(BaseModel):
+    sell_date: str
+    quantity: float = Field(gt=0)
+    sell_price: float = Field(gt=0)
     notes: str = ""
 
 
@@ -51,10 +61,24 @@ def create_watchlist(payload: WatchlistRequest) -> dict[str, Any]:
     return add_watchlist(payload.symbol, payload.notes, payload.target_price)
 
 
+@router.put("/watchlist/{item_id}")
+def edit_watchlist(item_id: int, payload: WatchlistRequest) -> dict[str, Any]:
+    updated = update_watchlist(item_id, _payload_dict(payload))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Watchlist item not found")
+    return updated
+
+
 @router.delete("/watchlist/{item_id}")
 def remove_watchlist(item_id: int) -> dict[str, str]:
     delete_watchlist(item_id)
     return {"status": "deleted"}
+
+
+@router.delete("/watchlist")
+def remove_all_watchlist() -> dict[str, Any]:
+    deleted = clear_watchlist()
+    return {"status": "cleared", "deleted": deleted}
 
 
 @router.get("/holdings")
@@ -85,3 +109,20 @@ def edit_holding(item_id: int, payload: HoldingRequest) -> dict[str, Any]:
 def remove_holding(item_id: int) -> dict[str, str]:
     delete_holding(item_id)
     return {"status": "deleted"}
+
+
+@router.post("/holdings/{item_id}/sell")
+def sell(item_id: int, payload: SellHoldingRequest) -> dict[str, Any]:
+    try:
+        result = sell_holding(
+            item_id,
+            payload.sell_date,
+            payload.quantity,
+            payload.sell_price,
+            payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    return result

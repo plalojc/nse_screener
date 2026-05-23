@@ -1,8 +1,8 @@
 import { tabs } from "../constants.js";
 
-export function Sidebar({ active, onChange }) {
+export function Sidebar({ active, onChange, hidden = false }) {
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${hidden ? "hidden" : ""}`}>
       <div className="brand">
         <div className="brandMark">N</div>
         <div>

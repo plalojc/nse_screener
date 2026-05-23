@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routes import dashboard, portfolio, reports, scan, scheduler as scheduler_routes
+from .routes import dashboard, portfolio, reports, scan, scheduler as scheduler_routes, settings as settings_routes
 from .runtime import apply_schedule, scheduler
 from .scanner_runner import ensure_agent_root
 from .settings import UI_ROOT
@@ -25,6 +25,7 @@ app.include_router(scan.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(portfolio.router, prefix="/api")
 app.include_router(scheduler_routes.router, prefix="/api")
+app.include_router(settings_routes.router, prefix="/api")
 
 
 @app.on_event("startup")

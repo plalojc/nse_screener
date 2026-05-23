@@ -32,6 +32,7 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 
 REPORT_INCLUDE_WEAK = _env_bool("REPORT_INCLUDE_WEAK", False)
 SCAN_TIME_IST = os.getenv("SCAN_TIME_IST", "08:20")
+TRADINGVIEW_CHART_ID = os.getenv("TRADINGVIEW_CHART_ID", "IMppZ0T")
 
 
 # == Internal application defaults =========================================
@@ -41,7 +42,15 @@ SCAN_TIME_IST = os.getenv("SCAN_TIME_IST", "08:20")
 DB_PATH = "nse_agent.db"
 NSE_BHAVCOPY_DB_PATH = "nse_bhavcopy.db"
 NSE_BHAVCOPY_DIR = "data/bhavcopy"
-REPORT_DIR = "reports"
+REPORT_DIR = "reports"  # backtest/manual exports; scan reports are rendered from DB
+
+DATABASE_URL = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_DSN", "")
+DB_BACKEND = os.getenv(
+    "DB_BACKEND",
+    "postgres" if DATABASE_URL else "sqlite",
+).strip().lower()
+DB_SYSTEM_SCHEMA = os.getenv("DB_SYSTEM_SCHEMA", "system").strip() or "system"
+DB_USER_SCHEMA = os.getenv("DB_USER_SCHEMA", "app_user").strip() or "app_user"
 
 REPORT_SIGNAL_TYPES = {"BREAKOUT", "STAGE1", "PULLBACK", "NEWS"}
 REPORT_INCLUDE_REJECTED = False

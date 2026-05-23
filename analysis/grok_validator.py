@@ -241,6 +241,7 @@ def validate_signals_grok_batch(signals: list, scan_date: str, batch_size: int |
     )
 
     api_batches = 0
+    total_batches = (len(to_api) + batch_size - 1) // batch_size if to_api else 0
     for start in range(0, len(to_api), batch_size):
         batch = to_api[start:start + batch_size]
         prompt = _build_prompt(batch)
@@ -249,7 +250,7 @@ def validate_signals_grok_batch(signals: list, scan_date: str, batch_size: int |
         for attempt in range(GROK_VALIDATOR_MAX_RETRIES):
             try:
                 api_batches += 1 if attempt == 0 else 0
-                print(f"  [Grok] Evaluating batch {start // batch_size + 1} ({len(batch)} stock(s))...")
+                print(f"  [Grok] Evaluating batch {start // batch_size + 1} of {total_batches} ({len(batch)} stock(s))...")
                 response = client.chat.completions.create(
                     model=GROK_VALIDATOR_MODEL,
                     messages=[

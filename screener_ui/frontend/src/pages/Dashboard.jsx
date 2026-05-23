@@ -8,11 +8,17 @@ import { Progress } from "../components/Progress.jsx";
 import { useLoad } from "../hooks/useLoad.js";
 import { money } from "../utils/format.js";
 
+function todayInputValue() {
+  const now = new Date();
+  const tzOffsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+}
+
 export function Dashboard() {
   const { data, error, loading, refresh } = useLoad(() => api("/api/dashboard"), []);
   const [job, setJob] = useState(null);
   const [lines, setLines] = useState([]);
-  const [scanDate, setScanDate] = useState("");
+  const [scanDate, setScanDate] = useState(todayInputValue);
   const [forceRefresh, setForceRefresh] = useState(false);
   const [scheduler, setScheduler] = useState({ enabled: false, time: "08:20" });
 
@@ -39,6 +45,24 @@ export function Dashboard() {
     return () => source.close();
   }, [job?.id]);
 
+  useEffect(() => {
+    const activeJob = job?.id ? job : data?.latest_job;
+    if (!activeJob?.id || ["success", "failed", "skipped"].includes(activeJob.status)) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const next = await api(`/api/scan/jobs/${activeJob.id}`);
+        setJob(next);
+        setLines(next.lines || []);
+        if (["success", "failed"].includes(next.status)) {
+          refresh();
+        }
+      } catch {
+        // EventSource remains the primary channel; polling is only a fallback.
+      }
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [job?.id, job?.status, data?.latest_job?.id, data?.latest_job?.status]);
+
   async function runScan() {
     const next = await api("/api/scan/run", {
       method: "POST",
@@ -49,6 +73,9 @@ export function Dashboard() {
     });
     setLines(next.lines || []);
     setJob(next);
+    if (next.status === "skipped") {
+      refresh();
+    }
   }
 
   async function saveSchedule() {

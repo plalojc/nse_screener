@@ -1,8 +1,9 @@
-import { BarChart3, CalendarClock, FileText, WalletCards } from "lucide-react";
+import { BarChart3, CalendarClock, FileText, Settings, WalletCards } from "lucide-react";
 
 export const tabs = [
   { id: "dashboard", label: "Dashboard", icon: BarChart3 },
   { id: "reports", label: "Reports", icon: FileText },
   { id: "watchlist", label: "Watchlist", icon: CalendarClock },
-  { id: "bought", label: "Bought", icon: WalletCards }
+  { id: "holdings", label: "Holdings", icon: WalletCards },
+  { id: "settings", label: "Settings", icon: Settings }
 ];

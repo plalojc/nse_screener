@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..reports import report_exists
 from ..runtime import jobs
 from ..scanner_runner import sse_event
 
@@ -21,6 +22,26 @@ class ScanRequest(BaseModel):
 
 @router.post("/run")
 def run_scan(payload: ScanRequest) -> dict[str, Any]:
+    if payload.scan_date and report_exists(payload.scan_date):
+        return {
+            "id": None,
+            "status": "skipped",
+            "progress": 100,
+            "message": f"Report already exists for {payload.scan_date}. Delete that report before running the scan again.",
+            "started_at": None,
+            "ended_at": None,
+            "exit_code": 0,
+            "lines": [
+                f"Report already exists for {payload.scan_date}.",
+                "Delete the existing report from Reports page before running this scan again.",
+            ],
+            "command": [],
+            "existing_report": {
+                "date": payload.scan_date,
+                "kind": "scan",
+                "filename": f"NSE-Breakout-{payload.scan_date}.html",
+            },
+        }
     job = jobs.start_scan(scan_date=payload.scan_date, force_refresh=payload.force_refresh)
     return job.snapshot()
 

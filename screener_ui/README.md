@@ -2,6 +2,16 @@
 
 FastAPI + React portal for the NSE breakout scanner.
 
+The UI uses the same database mode as the scanner. With no `DATABASE_URL`, it
+stores UI state in local SQLite. With `DATABASE_URL`, watchlist, holdings, and
+UI settings are stored in the configured user schema.
+
+Report pages are rendered from scanner database rows. Static HTML report files
+are not required; downloads generate the HTML content on demand.
+
+Use the Settings page to change the TradingView chart id, LLM validation limit,
+and whether WEAK verdicts are included in rendered reports.
+
 ## Structure
 
 ```text
@@ -28,22 +38,25 @@ screener_ui/
 
 ## Backend
 
-From `screener_ui`:
+Backend scripts live in the project root:
 
 ```powershell
-..\venv\Scripts\pip.exe install -r backend\requirements.txt
-.\start_backend.ps1
+cd C:\sharemarketWork\ShareMarketDemo\nse_breakout_agent
+.\run_backend.ps1
 .\stop_backend.ps1
 ```
 
-The same commands are also available as `.cmd` files, for example
-`start_backend.cmd` and `stop_backend.cmd`.
-
 By default the backend uses the parent folder as the scanner root. If this UI
-folder is moved elsewhere, set:
+folder is moved elsewhere, set `SCREENER_AGENT_ROOT` before starting the backend:
 
 ```powershell
 $env:SCREENER_AGENT_ROOT="C:\sharemarketWork\ShareMarketDemo\nse_breakout_agent"
+```
+
+If you want to use a specific Python interpreter, set:
+
+```powershell
+$env:SCREENER_AGENT_PYTHON="C:\sharemarketWork\ShareMarketDemo\nse_breakout_agent\venv\Scripts\python.exe"
 ```
 
 ## Frontend
@@ -57,21 +70,11 @@ npm install
 From `screener_ui`:
 
 ```powershell
-.\start_frontend.ps1
-.\stop_frontend.ps1
+.\run_ui.ps1
+.\stop_ui.ps1
 ```
 
 Open `http://127.0.0.1:5173` for Vite dev mode.
-
-To start or stop both services together:
-
-```powershell
-.\start_all.ps1
-.\stop_all.ps1
-```
-
-If PowerShell script execution is disabled on your machine, use
-`start_all.cmd` and `stop_all.cmd` instead.
 
 For production:
 
@@ -81,5 +84,5 @@ npm run build
 ```
 
 The FastAPI app serves `frontend/dist` automatically when the build exists.
-In production mode you only need `.\start_backend.ps1` and then open
+In production mode you only need the root `.\run_backend.ps1` and then open
 `http://127.0.0.1:8787`.

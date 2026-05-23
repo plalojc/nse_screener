@@ -14,13 +14,15 @@ venv/
 env/
 ENV/
 node_modules/
+.runtime/
+logs/
 screener_ui/.runtime/
 screener_ui/logs/
 
-# Environment / secrets  ← NEVER commit real keys
+# Environment / secrets - never commit real keys
 .env
 
-# Database (local SQLite data – not shared)
+# Database (local SQLite data - not shared)
 *.db
 *.sqlite
 *.sqlite3

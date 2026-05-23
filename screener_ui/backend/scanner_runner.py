@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .settings import AGENT_ROOT, scanner_python
+from .user_settings import app_settings
 
 
 STEP_PROGRESS = {
@@ -27,6 +28,31 @@ STEP_PROGRESS = {
     "results": 90,
     "html report saved": 98,
 }
+
+NOISY_MESSAGE_PATTERNS = (
+    re.compile(r"^\[\s*\d+/\d+\]"),
+    re.compile(r"^\s*\[Grok\]\s+Evaluating batch", re.IGNORECASE),
+    re.compile(r"^\s*\[Gemini\s+\d+/\d+\]", re.IGNORECASE),
+)
+
+
+def public_message(line: str, fallback: str) -> str:
+    clean = line.strip()
+    if not clean:
+        return fallback
+    if any(pattern.search(clean) for pattern in NOISY_MESSAGE_PATTERNS):
+        return fallback
+    if "grok batch validation" in clean.lower():
+        return "Validating selected stocks with Grok..."
+    if "gemini validation" in clean.lower():
+        return "Validating selected stocks with Gemini..."
+    if "llm gate" in clean.lower():
+        return "Selecting top-ranked stocks for AI review..."
+    if "loading nse" in clean.lower() or "loading ohlcv" in clean.lower():
+        return "Scanning NSE universe..."
+    if "done. loaded from cache" in clean.lower():
+        return "Technical scan completed. Preparing AI validation..."
+    return clean[-180:]
 
 
 @dataclass
@@ -50,7 +76,7 @@ class ScanJob:
         if len(self.lines) > 2000:
             self.lines = self.lines[-2000:]
         self.line_queue.put(clean)
-        self.message = clean[-220:]
+        self.message = public_message(clean, self.message)
         self.progress = max(self.progress, infer_progress(clean, self.progress))
 
     def snapshot(self) -> dict[str, Any]:
@@ -72,6 +98,18 @@ def infer_progress(line: str, current: int) -> int:
     for token, progress in STEP_PROGRESS.items():
         if token in lowered:
             return progress
+
+    grok_match = re.search(r"grok\]\s+evaluating batch\s+(\d+)(?:\s+of\s+(\d+))?", lowered)
+    if grok_match:
+        batch = int(grok_match.group(1))
+        total = int(grok_match.group(2) or batch)
+        return min(88, 74 + int((batch / max(1, total)) * 14))
+
+    gemini_match = re.search(r"gemini\s+(\d+)\s*/\s*(\d+)", lowered)
+    if gemini_match:
+        done = int(gemini_match.group(1))
+        total = int(gemini_match.group(2))
+        return min(88, 74 + int((done / max(1, total)) * 14))
 
     match = re.search(r"\[(\s*\d+)/(\d+)\]", line)
     if match:
@@ -114,6 +152,10 @@ class ScannerJobManager:
 
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        settings = app_settings()
+        env["LLM_VALIDATION_LIMIT"] = str(settings["llm_validation_limit"])
+        env["REPORT_INCLUDE_WEAK"] = "true" if settings["report_include_weak"] else "false"
+        env["TRADINGVIEW_CHART_ID"] = settings["tradingview_chart_id"]
         try:
             process = subprocess.Popen(
                 job.command,

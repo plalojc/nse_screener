@@ -6,7 +6,7 @@ The project now uses only:
 
 - NSE Bhavcopy for NSE instruments/OHLCV data
 - Gemini or Grok to validate trade signals
-- SQLite for local cache/history
+- SQLite by default, with optional Postgres for larger multi-year history
 - HTML reports for scan and backtest output
 
 ## Project Structure
@@ -82,7 +82,7 @@ Run:
 .\venv\Scripts\python.exe main.py scan
 ```
 
-The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters `SERIES == EQ`, stores OHLCV in `nse_bhavcopy.db`, and runs the breakout logic over that cache.
+The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters `SERIES == EQ`, stores OHLCV in the local cache, and runs the breakout logic over that cache.
 
 ## Report Filters
 
@@ -120,26 +120,41 @@ the LLM queue as `NEWS` candidates after Stage2 breakouts and Stage1 setups.
 ## UI Portal
 
 The `screener_ui` folder contains a FastAPI + React portal for running scans,
-scheduling daily scans, viewing/downloading HTML reports, managing a watchlist,
-and tracking bought shares with current P/L from cached Bhavcopy prices.
+scheduling daily scans, viewing reports from database rows, downloading HTML
+reports on demand, managing a watchlist, and tracking holdings P/L from cached
+Bhavcopy prices. The Settings page controls the TradingView chart id, LLM
+validation limit, and whether WEAK verdicts appear in reports.
 
 ```powershell
 .\venv\Scripts\pip.exe install -r screener_ui\backend\requirements.txt
-cd screener_ui
-.\start_backend.ps1
+.\run_backend.ps1
 ```
 
 Open `http://127.0.0.1:8787` after building the frontend. For local frontend
-development, run `.\start_frontend.ps1` from `screener_ui`. Use
-`.\stop_backend.ps1`, `.\stop_frontend.ps1`, or `.\stop_all.ps1` to stop the UI
-services. Matching `.cmd` scripts are also available, for example
-`start_all.cmd` and `stop_all.cmd`.
+development, run `.\run_ui.ps1` from `screener_ui`. Use root
+`.\stop_backend.ps1` to stop the backend and `screener_ui\stop_ui.ps1` to stop
+the UI dev server.
+
+Backend scripts are at the project root:
+
+```powershell
+.\run_backend.ps1
+.\stop_backend.ps1
+```
+
+UI scripts are inside `screener_ui`:
+
+```powershell
+cd screener_ui
+.\run_ui.ps1
+.\stop_ui.ps1
+```
 
 ## Flow
 
 1. Load NSE EQ instruments from NSE Bhavcopy.
 2. Filter invalid instruments and ETFs.
-3. Bulk-load OHLCV from the SQLite Bhavcopy cache.
+3. Bulk-load OHLCV from the Bhavcopy cache.
 4. Cheaply prefilter raw candles before calculating heavier technical indicators.
 5. Detect the built-in setup mix.
    - Breakouts must clear a prior 20/55-day high.
@@ -151,11 +166,42 @@ services. Matching `.cmd` scripts are also available, for example
 6. Rank signals locally and validate only the top `LLM_VALIDATION_LIMIT` stocks with the configured LLM validator.
    - Gemini validates per signal with Google Search grounding.
    - Grok validates compact batches through xAI's OpenAI-compatible API.
-7. Save signal history to SQLite.
+7. Save signal history to the configured database.
 8. Print candidates, top picks, portfolio entries, and an HTML report.
 
 ## Notes
 
 - Gemini and Grok are the supported decision engines.
-- The project intentionally keeps two SQLite files: `nse_agent.db` for app state and `nse_bhavcopy.db` for the larger market-data cache.
-- Generated reports and the SQLite DB are local runtime artifacts and are ignored by Git.
+- SQLite is the zero-config default. For heavier history, set `DATABASE_URL` to use Postgres.
+- In Postgres mode, common scanner/market tables are created in the `system` schema, and user-owned tables are created in the `app_user` schema by default.
+- Local SQLite DB files are runtime artifacts and are ignored by Git. HTML
+  reports are rendered from database rows when viewed or downloaded.
+
+## Postgres Mode
+
+SQLite is fine for quick local runs, but Postgres is the better path once the
+Bhavcopy cache grows past a year or when the UI will support multiple users.
+
+Set this in `.env`:
+
+```env
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/nse_breakout
+DB_SYSTEM_SCHEMA=system
+DB_USER_SCHEMA=app_user
+```
+
+Then install the driver and initialize tables with any normal command:
+
+```powershell
+.\venv\Scripts\pip.exe install -r requirements.txt
+.\venv\Scripts\python.exe main.py log
+```
+
+To copy current local SQLite data into Postgres after `DATABASE_URL` is set:
+
+```powershell
+.\venv\Scripts\python.exe tools\migrate_sqlite_to_postgres.py
+```
+
+Use `--replace` only when you want the target Postgres tables cleared before
+copying from the local SQLite files.

@@ -1,4 +1,4 @@
-export function Progress({ job, lines }) {
+export function Progress({ job }) {
   const progress = job?.progress || 0;
   return (
     <div className="progressBox">
@@ -7,7 +7,9 @@ export function Progress({ job, lines }) {
         <strong>{progress}%</strong>
       </div>
       <div className="bar"><span style={{ width: `${progress}%` }} /></div>
-      <pre>{(lines || []).slice(-120).join("\n") || "No scan output yet."}</pre>
+      <div className="progressMessage">
+        {job?.message || "No scan running."}
+      </div>
     </div>
   );
 }

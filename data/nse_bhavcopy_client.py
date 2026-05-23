@@ -3,26 +3,37 @@
 # ============================================================
 from __future__ import annotations
 
-import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 from config import LOOKBACK_DAYS, NSE_BHAVCOPY_DB_PATH, NSE_BHAVCOPY_DIR
+from data.db_backend import (
+    bulk_insert_dataframe,
+    connect,
+    ensure_schemas,
+    execute,
+    is_postgres,
+    read_dataframe,
+    system_schema,
+    table_name,
+)
+
+
+T_BHAVCOPY_OHLCV = table_name("bhavcopy_ohlcv", system_schema())
+T_BHAVCOPY_FILES = table_name("bhavcopy_files", system_schema())
 
 
 def _get_conn():
-    conn = sqlite3.connect(NSE_BHAVCOPY_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return connect(NSE_BHAVCOPY_DB_PATH)
 
 
 def init_bhavcopy_db():
     conn = _get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bhavcopy_ohlcv (
+    ensure_schemas(conn)
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_BHAVCOPY_OHLCV} (
             symbol TEXT NOT NULL,
             date   TEXT NOT NULL,
             open   REAL,
@@ -33,16 +44,17 @@ def init_bhavcopy_db():
             PRIMARY KEY (symbol, date)
         )
     """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bhavcopy_files (
+    timestamp_default = "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP" if is_postgres() else "TEXT DEFAULT (datetime('now'))"
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_BHAVCOPY_FILES} (
             date       TEXT PRIMARY KEY,
             file_path  TEXT,
             status     TEXT NOT NULL,
             message    TEXT,
-            fetched_at TEXT DEFAULT (datetime('now'))
+            fetched_at {timestamp_default}
         )
     """)
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_bhavcopy_symbol_date ON bhavcopy_ohlcv(symbol, date)")
+    execute(conn, f"CREATE INDEX IF NOT EXISTS idx_bhavcopy_symbol_date ON {T_BHAVCOPY_OHLCV}(symbol, date)")
     conn.commit()
     conn.close()
 
@@ -68,8 +80,9 @@ def _weekdays_between(start: date, end: date):
 
 
 def _is_cached(conn, d: date) -> bool:
-    row = conn.execute(
-        "SELECT status FROM bhavcopy_files WHERE date=?",
+    row = execute(
+        conn,
+        f"SELECT status FROM {T_BHAVCOPY_FILES} WHERE date=?",
         (d.isoformat(),),
     ).fetchone()
     # Accept both OK and FAILED as 'already processed' to prevent infinite holiday loops
@@ -77,8 +90,8 @@ def _is_cached(conn, d: date) -> bool:
 
 
 def _record_status(conn, d: date, status: str, file_path: str = "", message: str = ""):
-    conn.execute("""
-        INSERT INTO bhavcopy_files (date, file_path, status, message, fetched_at)
+    execute(conn, f"""
+        INSERT INTO {T_BHAVCOPY_FILES} (date, file_path, status, message, fetched_at)
         VALUES (?, ?, ?, ?, datetime('now'))
         ON CONFLICT(date) DO UPDATE SET
             file_path=excluded.file_path,
@@ -122,8 +135,13 @@ def _download_and_store(d: date) -> int:
         file_path = bhavcopy_save(d, str(out_dir))
         df = pd.read_csv(file_path)
         clean = _normalise_bhavcopy(df, d)
-        conn.execute("DELETE FROM bhavcopy_ohlcv WHERE date=?", (d.isoformat(),))
-        clean.to_sql("bhavcopy_ohlcv", conn, if_exists="append", index=False, method="multi")
+        execute(conn, f"DELETE FROM {T_BHAVCOPY_OHLCV} WHERE date=?", (d.isoformat(),))
+        bulk_insert_dataframe(
+            conn,
+            T_BHAVCOPY_OHLCV if is_postgres() else "bhavcopy_ohlcv",
+            clean,
+            ["symbol", "date", "open", "high", "low", "close", "volume"],
+        )
         _record_status(conn, d, "OK", str(file_path), f"{len(clean)} EQ rows")
         conn.commit()
         return len(clean)
@@ -165,12 +183,13 @@ def latest_cached_date(upto_date: str | None = None) -> str | None:
     init_bhavcopy_db()
     conn = _get_conn()
     if upto_date:
-        row = conn.execute(
-            "SELECT MAX(date) AS max_date FROM bhavcopy_ohlcv WHERE date<=?",
+        row = execute(
+            conn,
+            f"SELECT MAX(date) AS max_date FROM {T_BHAVCOPY_OHLCV} WHERE date<=?",
             (upto_date,),
         ).fetchone()
     else:
-        row = conn.execute("SELECT MAX(date) AS max_date FROM bhavcopy_ohlcv").fetchone()
+        row = execute(conn, f"SELECT MAX(date) AS max_date FROM {T_BHAVCOPY_OHLCV}").fetchone()
     conn.close()
     return row["max_date"] if row and row["max_date"] else None
 
@@ -185,9 +204,9 @@ def fetch_nse_instruments() -> pd.DataFrame:
         return pd.DataFrame(columns=["symbol", "name", "instrument_key", "lot_size", "isin"])
 
     conn = _get_conn()
-    df = pd.read_sql(
-        "SELECT DISTINCT symbol FROM bhavcopy_ohlcv WHERE date=? ORDER BY symbol",
+    df = read_dataframe(
         conn,
+        f"SELECT DISTINCT symbol FROM {T_BHAVCOPY_OHLCV} WHERE date=? ORDER BY symbol",
         params=(latest,),
     )
     conn.close()
@@ -201,8 +220,9 @@ def fetch_nse_instruments() -> pd.DataFrame:
 def get_ohlcv_date_map() -> dict:
     init_bhavcopy_db()
     conn = _get_conn()
-    rows = conn.execute(
-        "SELECT symbol, MAX(date) AS max_date FROM bhavcopy_ohlcv GROUP BY symbol"
+    rows = execute(
+        conn,
+        f"SELECT symbol, MAX(date) AS max_date FROM {T_BHAVCOPY_OHLCV} GROUP BY symbol"
     ).fetchall()
     conn.close()
     return {r["symbol"]: r["max_date"] for r in rows}
@@ -211,9 +231,9 @@ def get_ohlcv_date_map() -> dict:
 def load_ohlcv(symbol: str) -> pd.DataFrame:
     init_bhavcopy_db()
     conn = _get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM bhavcopy_ohlcv WHERE symbol=? ORDER BY date",
+    df = read_dataframe(
         conn,
+        f"SELECT * FROM {T_BHAVCOPY_OHLCV} WHERE symbol=? ORDER BY date",
         params=(symbol,),
     )
     conn.close()
@@ -232,14 +252,14 @@ def load_ohlcv_bulk(symbols: list[str] | None = None, upto_date: str | None = No
     """
     init_bhavcopy_db()
     params: tuple[str, ...] = ()
-    query = "SELECT * FROM bhavcopy_ohlcv"
+    query = f"SELECT * FROM {T_BHAVCOPY_OHLCV}"
     if upto_date:
         query += " WHERE date<=?"
         params = (upto_date,)
     query += " ORDER BY symbol, date"
 
     conn = _get_conn()
-    df = pd.read_sql(query, conn, params=params)
+    df = read_dataframe(conn, query, params=params)
     conn.close()
 
     if df.empty:
@@ -261,9 +281,9 @@ def load_ohlcv_bulk(symbols: list[str] | None = None, upto_date: str | None = No
 def load_ohlcv_upto(symbol: str, upto_date: str) -> pd.DataFrame:
     init_bhavcopy_db()
     conn = _get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM bhavcopy_ohlcv WHERE symbol=? AND date<=? ORDER BY date",
+    df = read_dataframe(
         conn,
+        f"SELECT * FROM {T_BHAVCOPY_OHLCV} WHERE symbol=? AND date<=? ORDER BY date",
         params=(symbol, upto_date),
     )
     conn.close()
@@ -275,9 +295,9 @@ def load_ohlcv_upto(symbol: str, upto_date: str) -> pd.DataFrame:
 def load_ohlcv_range(symbol: str, from_date: str, to_date: str) -> pd.DataFrame:
     init_bhavcopy_db()
     conn = _get_conn()
-    df = pd.read_sql(
-        "SELECT * FROM bhavcopy_ohlcv WHERE symbol=? AND date>? AND date<=? ORDER BY date",
+    df = read_dataframe(
         conn,
+        f"SELECT * FROM {T_BHAVCOPY_OHLCV} WHERE symbol=? AND date>? AND date<=? ORDER BY date",
         params=(symbol, from_date, to_date),
     )
     conn.close()
@@ -289,8 +309,9 @@ def load_ohlcv_range(symbol: str, from_date: str, to_date: str) -> pd.DataFrame:
 def get_symbols_with_data_upto(upto_date: str) -> list[str]:
     init_bhavcopy_db()
     conn = _get_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT symbol FROM bhavcopy_ohlcv WHERE date<=? ORDER BY symbol",
+    rows = execute(
+        conn,
+        f"SELECT DISTINCT symbol FROM {T_BHAVCOPY_OHLCV} WHERE date<=? ORDER BY symbol",
         (upto_date,),
     ).fetchall()
     conn.close()

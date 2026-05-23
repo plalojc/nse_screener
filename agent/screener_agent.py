@@ -37,10 +37,9 @@ from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
                     MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, TOP_PICKS_COUNT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
-                    TOP_PICKS_RSI_MAX, REPORT_DIR,
+                    TOP_PICKS_RSI_MAX,
                     GEMINI_VALIDATOR_MODEL, GROK_VALIDATOR_MODEL,
                     MAX_CATALYST_CANDIDATES)
-from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
 
@@ -452,14 +451,6 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     # == TOP PICKS: the final actionable shortlist =========================
     _print_top_picks(signals, target_date)
-
-    # == HTML Report ========================================================
-    if signals:
-        try:
-            html_path = write_html_report(signals, REPORT_DIR, target_date)
-            print(Fore.CYAN + f"\n  HTML report saved -> {html_path}")
-        except Exception as exc:
-            print(Fore.YELLOW + f"  [WARN] Could not write HTML report: {exc}")
 
     return signals
 

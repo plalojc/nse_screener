@@ -14,11 +14,10 @@ Columns rendered:
   6. RSI         - RSI-14 (colour-coded)
   7. Vol          - volume ratio vs 20-day avg (colour-coded)
   8. ATR14       - average true range (volatility context)
-  9. Near High % - % below 52-week high (lower = stronger positioning)
- 10. Score       - multi-factor score (colour-coded)
- 11. LLM Verdict - CONFIRM / WEAK / REJECT / SKIPPED (colour-coded)
- 12. LLM Conf    - LLM confidence 0-10
- 13. AI Reasoning - short reasoning text from LLM
+  9. Score       - multi-factor score (colour-coded)
+ 10. LLM Verdict - CONFIRM / WEAK / REJECT / SKIPPED (colour-coded)
+ 11. LLM Conf    - LLM confidence 0-10
+ 12. AI Reasoning - short reasoning text from LLM
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from __future__ import annotations
 import os
 from datetime import date
 from html import escape
+from io import StringIO
 from pathlib import Path
 
 from config import (
@@ -33,6 +33,7 @@ from config import (
     REPORT_INCLUDE_SKIPPED,
     REPORT_INCLUDE_WEAK,
     REPORT_SIGNAL_TYPES,
+    TRADINGVIEW_CHART_ID,
 )
 
 
@@ -44,45 +45,92 @@ _PAGE_HEAD = """\
     <meta charset="UTF-8">
     <title>NSE Breakout Report - {date}</title>
     <style>
-        body  {{ font-family: Arial, sans-serif; font-size: 13px; margin: 16px; }}
-        h2    {{ color: #2c3e50; }}
-        p     {{ color: #555; margin-top: 0; }}
-        table {{ border-collapse: collapse; width: 100%; }}
-        th, td {{ border: 1px solid #ccc; padding: 5px 8px; text-align: center; }}
-        th    {{ background: #2c3e50; color: white; position: sticky; top: 0; }}
-        tr:nth-child(even) {{ background: #f9f9f9; }}
-        tr:hover {{ background: #DAF7A6; cursor: pointer; }}
-        td.reason {{ text-align: left; font-size: 11px; color: #444; max-width: 300px; }}
-        .news-detail-btn {{ border:1px solid #c0392b; background:#fff5f3; color:#922b21; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; margin-right:6px; }}
-        .modal-backdrop {{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:1000; }}
-        .modal {{ display:none; position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(680px,92vw); background:white; border-radius:6px; box-shadow:0 18px 60px rgba(0,0,0,.25); z-index:1001; }}
-        .modal header {{ padding:12px 16px; border-bottom:1px solid #ddd; display:flex; justify-content:space-between; align-items:center; }}
-        .modal h3 {{ margin:0; color:#2c3e50; }}
-        .modal button.close {{ border:0; background:#eee; border-radius:4px; padding:4px 8px; cursor:pointer; }}
-        .modal .body {{ padding:14px 16px; line-height:1.45; color:#333; }}
-        .modal .label {{ font-weight:bold; color:#555; }}
-        .modal a {{ color:#1f618d; }}
+        body  {{ font-family: Arial, sans-serif; font-size: 12px; margin: 14px; color:#182230; background:#f8fafc; }}
+        h2    {{ color: #26364a; font-size:20px; margin:0 0 14px; }}
+        h3    {{ color:#111827; font-size:16px; margin:14px 0 10px; }}
+        p     {{ color: #4b5563; margin-top: 0; }}
+        table {{ border-collapse: collapse; width: 100%; background:white; box-shadow:0 1px 2px rgba(15,23,42,.06); }}
+        th, td {{ border: 1px solid #d7dde5; padding: 5px 7px; text-align: center; line-height:1.25; }}
+        th    {{ background: #2f3d4f; color: white; position: sticky; top: 0; font-size:12px; font-weight:700; }}
+        td    {{ font-size:12px; }}
+        tr:nth-child(even) {{ background: #fbfcfe; }}
+        tr:hover {{ background: #eef8f3; cursor: pointer; }}
+        td.symbol {{ font-weight:700; letter-spacing:0; }}
+        td.reason {{ text-align: left; color: #3f4a5a; max-width: 260px; position:relative; }}
+        .reasonPreview {{ display:block; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+        .reasonFull {{ display:none; position:absolute; left:8px; top:calc(100% + 4px); z-index:20; width:360px; background:#111827; color:white; border-radius:4px; padding:9px 10px; box-shadow:0 10px 28px rgba(0,0,0,.25); line-height:1.35; }}
+        td.reason:hover .reasonFull {{ display:block; }}
+        td.newsReason:hover .reasonFull {{ display:none; }}
+        .newsSummary {{ align-items:center; color:#7c2d12; cursor:pointer; display:flex; gap:7px; max-width:250px; min-height:22px; text-decoration:none; }}
+        .newsSummary:hover .newsText {{ color:#9a3412; text-decoration:underline; }}
+        .newsPill {{ background:#fff1e8; border:1px solid #fed7aa; border-radius:999px; color:#9a3412; flex:0 0 auto; font-size:10px; font-weight:700; padding:2px 6px; text-transform:uppercase; }}
+        .newsText {{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+        td.slCell {{ min-width:40px; position:relative; width:44px; }}
+        .slNo {{ display:inline-block; }}
+        .watch-btn {{ align-items:center; background:#1f6f54; border:1px solid #145c42; border-radius:50%; color:white; cursor:pointer; display:none; font-size:16px; font-weight:700; height:24px; justify-content:center; line-height:20px; padding:0; width:24px; }}
+        tr:hover .slCell .slNo {{ display:none; }}
+        tr:hover .slCell .watch-btn {{ display:inline-flex; }}
+        .watch-btn.added {{ background:#145c42; font-size:11px; width:42px; border-radius:12px; }}
+        .modal-backdrop {{ display:none; position:fixed; inset:0; background:rgba(15,23,42,.48); z-index:1000; }}
+        .modal {{ display:none; position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; overflow:hidden; background:white; border-radius:8px; box-shadow:0 24px 70px rgba(15,23,42,.34); z-index:1001; }}
+        .modal header {{ background:#f8fafc; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:flex-start; gap:14px; padding:16px 18px; }}
+        .modal h3 {{ margin:0; color:#17212f; font-size:17px; }}
+        .modal .subtitle {{ color:#64748b; font-size:12px; margin-top:4px; }}
+        .modal button.close {{ background:white; border:1px solid #cbd5e1; border-radius:4px; color:#334155; cursor:pointer; padding:5px 10px; }}
+        .modal .body {{ color:#334155; line-height:1.5; max-height:calc(82vh - 74px); overflow:auto; padding:16px 18px 18px; }}
+        .modalGrid {{ display:grid; gap:10px; grid-template-columns:repeat(3, minmax(0, 1fr)); margin-bottom:14px; }}
+        .modalInfo {{ background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:9px 10px; }}
+        .modalInfo span {{ color:#64748b; display:block; font-size:11px; margin-bottom:3px; }}
+        .modalInfo strong {{ color:#17212f; font-size:12px; }}
+        .modalBlock {{ border-top:1px solid #e2e8f0; padding-top:12px; margin-top:12px; }}
+        .modalBlock .label {{ color:#17212f; display:block; font-weight:700; margin-bottom:4px; }}
+        .modal a {{ color:#1f6f54; font-weight:700; }}
+        @media (max-width:720px) {{ .modalGrid {{ grid-template-columns:1fr; }} }}
     </style>
     <script>
         function openChart(symbol) {{
-            var url = "https://in.tradingview.com/chart/?symbol=NSE:" + symbol;
+            var base = "{tradingview_base}";
+            var url = base + "?symbol=NSE:" + symbol;
             var left = (screen.width  / 2) - 600;
             var top  = (screen.height / 2) - 300;
             window.open(url, symbol, "height=600,width=1200,top=" + top + ",left=" + left);
             return false;
         }}
+        var activeNewsModal = null;
         function showNewsDetail(id) {{
             document.getElementById("modal-backdrop").style.display = "block";
             document.getElementById(id).style.display = "block";
+            activeNewsModal = id;
         }}
         function closeNewsDetail(id) {{
+            var target = id || activeNewsModal;
             document.getElementById("modal-backdrop").style.display = "none";
-            document.getElementById(id).style.display = "none";
+            if (target) {{
+                document.getElementById(target).style.display = "none";
+            }}
+            activeNewsModal = null;
+        }}
+        async function addToWatchlist(symbol, button) {{
+            try {{
+                await fetch("/api/watchlist", {{
+                    method: "POST",
+                    headers: {{ "Content-Type": "application/json" }},
+                    body: JSON.stringify({{
+                        symbol: symbol,
+                        notes: "Added from report {date}",
+                        target_price: null
+                    }})
+                }});
+                button.classList.add("added");
+                button.textContent = "Added";
+            }} catch (err) {{
+                button.textContent = "Failed";
+            }}
         }}
     </script>
 </head>
 <body>
-    <div id="modal-backdrop" class="modal-backdrop"></div>
+    <div id="modal-backdrop" class="modal-backdrop" onclick="closeNewsDetail()"></div>
     <h2>&#x1F4C8; NSE EQ Breakout Report &ndash; {date}</h2>
     <p>
         {total} recommended signal(s) shown from {raw_total} candidate(s) &nbsp;|&nbsp;
@@ -104,7 +152,6 @@ _TABLE_HEAD = """\
                 <th>RSI</th>
                 <th>Vol</th>
                 <th>ATR14</th>
-                <th>Near High %</th>
                 <th>Score</th>
                 <th>LLM Verdict</th>
                 <th>LLM Conf</th>
@@ -127,9 +174,9 @@ _PAGE_FOOT = """\
 
 # == Report filters ========================================================
 
-def _allowed_report_verdicts() -> set[str]:
+def _allowed_report_verdicts(include_weak: bool | None = None) -> set[str]:
     verdicts = {"CONFIRM"}
-    if REPORT_INCLUDE_WEAK:
+    if REPORT_INCLUDE_WEAK if include_weak is None else include_weak:
         verdicts.add("WEAK")
     if REPORT_INCLUDE_REJECTED:
         verdicts.add("REJECT")
@@ -138,12 +185,12 @@ def _allowed_report_verdicts() -> set[str]:
     return verdicts
 
 
-def _is_report_signal(sig: dict) -> bool:
+def _is_report_signal(sig: dict, include_weak: bool | None = None) -> bool:
     signal_type = str(sig.get("signal_type") or "").upper()
     verdict = str(sig.get("llm_verdict") or "SKIPPED").upper()
     if REPORT_SIGNAL_TYPES and signal_type not in REPORT_SIGNAL_TYPES:
         return False
-    return verdict in _allowed_report_verdicts()
+    return verdict in _allowed_report_verdicts(include_weak)
 
 
 def _report_sort_key(sig: dict) -> tuple:
@@ -165,19 +212,18 @@ def _report_sort_key(sig: dict) -> tuple:
 
 _ROW = (
     "            <tr>"
-    "<td>{sl}</td>"
-    "<td onclick=\"openChart('{sym}')\" style=\"cursor:pointer;font-weight:bold\">{sym}</td>"
+    "<td class=\"slCell\"><span class=\"slNo\">{sl}</span><button class=\"watch-btn\" title=\"Add {sym} to watchlist\" onclick=\"addToWatchlist('{sym}', this); event.stopPropagation();\">+</button></td>"
+    "<td class=\"symbol\" onclick=\"openChart('{sym}')\" style=\"cursor:pointer\">{sym}</td>"
     "<td bgcolor=\"{sig_c}\">{sig}</td>"
     "<td bgcolor=\"{stg_c}\">{stg}</td>"
     "<td>{close}</td>"
     "<td bgcolor=\"{rsi_c}\">{rsi}</td>"
     "<td bgcolor=\"{vol_c}\">{vol}</td>"
     "<td>{atr}</td>"
-    "<td>{near_high}</td>"
     "<td bgcolor=\"{sc_c}\">{score}</td>"
     "<td bgcolor=\"{llm_c}\"><b>{llm_v}</b></td>"
     "<td>{llm_conf}</td>"
-    "<td class=\"reason\">{reasoning}</td>"
+    "<td class=\"reason {reason_class}\"><span class=\"reasonPreview\">{reasoning_preview}</span><span class=\"reasonFull\">{reasoning_full}</span></td>"
     "</tr>\n"
 )
 
@@ -227,31 +273,53 @@ def _news_detail_cell(sig: dict, modal_id: str) -> tuple[str, str]:
     symbol = escape(str(sig.get("symbol") or "?"))
     category = escape(str(sig.get("catalyst_category") or "NEWS"))
     source = escape(str(sig.get("catalyst_source") or "Catalyst"))
-    theme = escape(str(sig.get("catalyst_theme") or "-"))
-    mapping_source = escape(str(sig.get("catalyst_mapping_source") or "-"))
-    confidence = escape(str(sig.get("catalyst_confidence") or "-"))
-    summary = escape(str(sig.get("catalyst_summary") or sig.get("reasons") or "-"))
-    reasoning = escape(str(sig.get("llm_reasoning") or "-"))
+    theme_raw = str(sig.get("catalyst_theme") or "").strip()
+    mapping_raw = str(sig.get("catalyst_mapping_source") or "").strip()
+    confidence_raw = str(sig.get("catalyst_confidence") or "").strip()
+    theme = escape(theme_raw or "-")
+    mapping_source = escape(mapping_raw or "-")
+    confidence = escape(confidence_raw or "-")
+    summary_raw = str(sig.get("catalyst_summary") or sig.get("reasons") or "-")
+    reasoning_raw = str(sig.get("llm_reasoning") or "-")
+    summary = escape(summary_raw)
+    reasoning = escape(reasoning_raw)
     url = str(sig.get("catalyst_url") or "")
-    url_html = f'<p><span class="label">Link:</span> <a href="{escape(url)}" target="_blank">Open source</a></p>' if url else ""
+    url_html = f'<div class="modalBlock"><span class="label">Source link</span><a href="{escape(url)}" target="_blank">Open original catalyst</a></div>' if url else ""
     cell = (
-        f'<button class="news-detail-btn" onclick="showNewsDetail(\'{modal_id}\'); event.stopPropagation();">'
-        f'Details</button>{summary[:90]}'
+        f'<span class="newsSummary" role="button" tabindex="0" title="Open catalyst details" '
+        f'onclick="showNewsDetail(\'{modal_id}\'); event.stopPropagation();" '
+        f'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){{showNewsDetail(\'{modal_id}\'); event.stopPropagation(); event.preventDefault();}}">'
+        f'<span class="newsPill">News</span><span class="newsText">{escape(_short_reason(summary_raw, 86))}</span></span>'
     )
     modal = (
         f'<div id="{modal_id}" class="modal">'
-        f'<header><h3>{symbol} News Catalyst</h3>'
+        f'<header><div><h3>{symbol} News Catalyst</h3>'
+        f'<div class="subtitle">{escape(_short_reason(summary_raw, 110))}</div></div>'
         f'<button class="close" onclick="closeNewsDetail(\'{modal_id}\')">Close</button></header>'
         f'<div class="body">'
-        f'<p><span class="label">Category:</span> {category}</p>'
-        f'<p><span class="label">Source:</span> {source}</p>'
-        f'<p><span class="label">Theme map:</span> {theme} / {mapping_source} / confidence {confidence}</p>'
-        f'<p><span class="label">Catalyst:</span> {summary}</p>'
-        f'<p><span class="label">LLM view:</span> {reasoning}</p>'
+        f'<div class="modalGrid">'
+        f'<div class="modalInfo"><span>Category</span><strong>{category}</strong></div>'
+        f'<div class="modalInfo"><span>Source</span><strong>{source}</strong></div>'
+        f'<div class="modalInfo"><span>Mapping confidence</span><strong>{confidence}</strong></div>'
+        f'</div>'
+        f'<div class="modalGrid">'
+        f'<div class="modalInfo"><span>Theme</span><strong>{theme}</strong></div>'
+        f'<div class="modalInfo"><span>Mapping source</span><strong>{mapping_source}</strong></div>'
+        f'<div class="modalInfo"><span>Signal type</span><strong>News driven</strong></div>'
+        f'</div>'
+        f'<div class="modalBlock"><span class="label">Catalyst</span>{summary}</div>'
+        f'<div class="modalBlock"><span class="label">AI view</span>{reasoning}</div>'
         f'{url_html}'
         f'</div></div>\n'
     )
     return cell, modal
+
+
+def _short_reason(text: str, limit: int = 76) -> str:
+    clean = " ".join(str(text or "-").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 1)].rstrip() + "..."
 
 
 def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
@@ -265,18 +333,18 @@ def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
         vol = s.get("vol_ratio")
         atr = s.get("atr14")
         score = s.get("score", 0)
-        high_52w = s.get("high_52w")
         llm_v = s.get("llm_verdict") or "SKIPPED"
         llm_conf = s.get("llm_confidence")
-        reasoning = escape((s.get("llm_reasoning") or s.get("catalyst_summary") or "")[:120] or "-")
+        full_reasoning_text = s.get("llm_reasoning") or s.get("catalyst_summary") or "-"
+        reasoning_preview = escape(_short_reason(full_reasoning_text))
+        reasoning_full = escape(str(full_reasoning_text or "-"))
+        reason_class = ""
         if str(s.get("signal_type") or "").upper() == "NEWS":
             reasoning, modal = _news_detail_cell(s, f"news-modal-{title.replace(' ', '-').lower()}-{sl}")
             modals.append(modal)
-
-        if high_52w and close and high_52w > 0:
-            near_high = f"{((high_52w - close) / high_52w * 100):.1f}%"
-        else:
-            near_high = "-"
+            reasoning_preview = reasoning
+            reasoning_full = escape(str(s.get("llm_reasoning") or s.get("catalyst_summary") or "-"))
+            reason_class = "newsReason"
 
         fh.write(_ROW.format(
             sl=sl,
@@ -291,13 +359,14 @@ def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
             vol=f"{vol:.2f}x" if vol is not None else "-",
             vol_c=_vol_color(vol),
             atr=f"{atr:.2f}" if atr is not None else "-",
-            near_high=near_high,
             score=score,
             sc_c=_score_color(score),
             llm_v=escape(str(llm_v)),
             llm_c=_llm_color(llm_v),
             llm_conf=f"{llm_conf}/10" if llm_conf is not None else "-",
-            reasoning=reasoning,
+            reason_class=reason_class,
+            reasoning_preview=reasoning_preview,
+            reasoning_full=reasoning_full,
         ))
     fh.write(_TABLE_FOOT)
     for modal in modals:
@@ -306,38 +375,45 @@ def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
 
 # == Public API ================================================================
 
-def write(signals: list[dict], output_dir: str, scan_date: str | None = None) -> Path:
-    """
-    Render *signals* to an HTML file in *output_dir*.
+def _tradingview_base(chart_id: str | None) -> str:
+    clean = "".join(ch for ch in str(chart_id or "").strip() if ch.isalnum() or ch in {"_", "-"})
+    if not clean:
+        return "https://in.tradingview.com/chart/"
+    return f"https://in.tradingview.com/chart/{clean}/"
 
-    Parameters
-    ----------
-    signals    : list of signal dicts produced by the screener (after LLM enrichment)
-    output_dir : directory path (created automatically if missing)
-    scan_date  : optional YYYY-MM-DD string; today's date used when omitted
 
-    Returns
-    -------
-    Path of the written HTML file.
-    """
+def render(
+    signals: list[dict],
+    scan_date: str | None = None,
+    raw_total: int | None = None,
+    tradingview_chart_id: str | None = None,
+    include_weak: bool | None = None,
+) -> str:
+    """Render signals to an HTML string."""
     report_date = scan_date or str(date.today())
-    out_path    = Path(output_dir) / f"NSE-Breakout-{report_date}.html"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    report_signals = [s for s in signals if _is_report_signal(s)]
+    report_signals = [s for s in signals if _is_report_signal(s, include_weak)]
     sorted_sigs = sorted(report_signals, key=_report_sort_key)
     technical_sigs = [s for s in sorted_sigs if str(s.get("signal_type") or "").upper() != "NEWS"]
     news_sigs = [s for s in sorted_sigs if str(s.get("signal_type") or "").upper() == "NEWS"]
 
-    with open(out_path, "w", encoding="utf-8") as fh:
-        # == Head ==============================================================
-        fh.write(_PAGE_HEAD.format(
-            date=report_date,
-            total=len(sorted_sigs),
-            raw_total=len(signals),
-        ))
-        _write_signal_table(fh, "Technical Analysis Shares", technical_sigs)
-        _write_signal_table(fh, "News Driven Shares", news_sigs)
-        fh.write(_PAGE_FOOT)
+    fh = StringIO()
+    fh.write(_PAGE_HEAD.format(
+        date=report_date,
+        total=len(sorted_sigs),
+        raw_total=raw_total if raw_total is not None else len(signals),
+        tradingview_base=_tradingview_base(tradingview_chart_id or TRADINGVIEW_CHART_ID),
+    ))
+    _write_signal_table(fh, "Technical Analysis Shares", technical_sigs)
+    _write_signal_table(fh, "News Driven Shares", news_sigs)
+    fh.write(_PAGE_FOOT)
+    return fh.getvalue()
+
+
+def write(signals: list[dict], output_dir: str, scan_date: str | None = None) -> Path:
+    """Render signals to an HTML file. Kept for manual/export use only."""
+    report_date = scan_date or str(date.today())
+    out_path = Path(output_dir) / f"NSE-Breakout-{report_date}.html"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(render(signals, report_date), encoding="utf-8")
 
     return out_path

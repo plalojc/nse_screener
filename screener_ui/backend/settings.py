@@ -10,7 +10,9 @@ UI_ROOT = BACKEND_DIR.parent
 DEFAULT_AGENT_ROOT = UI_ROOT.parent
 
 AGENT_ROOT = Path(os.getenv("SCREENER_AGENT_ROOT", str(DEFAULT_AGENT_ROOT))).resolve()
-REPORTS_DIR = AGENT_ROOT / "reports"
+if str(AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(AGENT_ROOT))
+
 BHAVCOPY_DB_PATH = AGENT_ROOT / "nse_bhavcopy.db"
 UI_DB_PATH = Path(os.getenv("SCREENER_UI_DB", str(BACKEND_DIR / "ui_state.db"))).resolve()
 

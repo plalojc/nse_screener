@@ -1,38 +1,75 @@
+from __future__ import annotations
 
-# ============================================================
-# data/database.py - SQLite layer
-# ============================================================
-import sqlite3
+from datetime import date, timedelta
+
 import pandas as pd
+
 from config import DB_PATH
+from data.db_backend import (
+    connect,
+    ensure_schemas,
+    execute,
+    executemany,
+    integrity_error_types,
+    is_postgres,
+    read_dataframe,
+    system_schema,
+    table_name,
+    user_schema,
+)
+
+
+T_SIGNALS = table_name("signals", user_schema())
+T_POSITIONS = table_name("positions", user_schema())
+T_BREAKOUT_LOG = table_name("breakout_log", system_schema())
+T_LLM_EVALUATIONS = table_name("llm_evaluations", system_schema())
+T_CATALYST_EVENTS = table_name("catalyst_events", system_schema())
+T_INVALID_INSTRUMENTS = table_name("invalid_instruments", system_schema())
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")   # enforce FK constraints
-    return conn
+    return connect(DB_PATH)
+
+
+def _id_type() -> str:
+    return "BIGSERIAL" if is_postgres() else "INTEGER"
+
+
+def _now_default() -> str:
+    return "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP" if is_postgres() else "DATETIME DEFAULT CURRENT_TIMESTAMP"
+
+
+def _add_column(conn, table: str, col: str, typedef: str) -> None:
+    if is_postgres():
+        execute(conn, f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typedef}")
+        return
+    try:
+        execute(conn, f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+    except Exception:
+        pass
 
 
 def init_db():
     conn = get_conn()
-    cur  = conn.cursor()
+    ensure_schemas(conn)
+    id_type = _id_type()
+    now_default = _now_default()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS signals (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_SIGNALS} (
+            id          {id_type} PRIMARY KEY,
             symbol      TEXT,
             signal_date TEXT,
-            signal_type TEXT,       -- BUY / SELL
+            signal_type TEXT,
             price       REAL,
             reason      TEXT,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            created_at  {now_default}
         )
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS positions (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_POSITIONS} (
+            id                  {id_type} PRIMARY KEY,
             symbol              TEXT UNIQUE,
             buy_date            TEXT,
             buy_price           REAL,
@@ -40,63 +77,58 @@ def init_db():
             target_price        REAL,
             stop_loss_price     REAL,
             trailing_stop_price REAL,
-            status              TEXT DEFAULT 'OPEN',   -- OPEN / CLOSED
+            status              TEXT DEFAULT 'OPEN',
             exit_price          REAL,
             exit_date           TEXT,
             pnl_pct             REAL
         )
     """)
-    # Migrate existing databases that pre-date the trailing_stop_price column
-    try:
-        cur.execute("ALTER TABLE positions ADD COLUMN trailing_stop_price REAL")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # column already exists
+    _add_column(conn, T_POSITIONS, "trailing_stop_price", "REAL")
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS breakout_log (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_date       TEXT    NOT NULL,
-            symbol          TEXT    NOT NULL,
-            signal_type     TEXT,           -- BREAKOUT / PULLBACK
-            close           REAL,
-            rsi             REAL,
-            vol_ratio       REAL,
-            score           INTEGER,
-            stage           TEXT,
-            ema20           REAL,
-            ema50           REAL,
-            atr14           REAL,
-            swing_low       REAL,
-            reasons         TEXT,
-            llm_verdict     TEXT,           -- CONFIRM / WEAK / REJECT / SKIPPED
-            llm_confidence  INTEGER,        -- 1-10
-            llm_reasoning   TEXT,
-            llm_model       TEXT,
-            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(scan_date, symbol)       -- one entry per symbol per day
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_BREAKOUT_LOG} (
+            id                  {id_type} PRIMARY KEY,
+            scan_date           TEXT NOT NULL,
+            symbol              TEXT NOT NULL,
+            signal_type         TEXT,
+            close               REAL,
+            rsi                 REAL,
+            vol_ratio           REAL,
+            score               INTEGER,
+            stage               TEXT,
+            ema20               REAL,
+            ema50               REAL,
+            atr14               REAL,
+            swing_low           REAL,
+            reasons             TEXT,
+            llm_verdict         TEXT,
+            llm_confidence      INTEGER,
+            llm_reasoning       TEXT,
+            llm_model           TEXT,
+            panel_method        TEXT,
+            vcp_detected        INTEGER,
+            bull_flag_detected  INTEGER,
+            pattern_score       INTEGER,
+            created_at          {now_default},
+            UNIQUE(scan_date, symbol)
         )
     """)
-    # Migrations for existing DBs.
     for col, typedef in [
-        ("swing_low",          "REAL"),
-        ("llm_verdict",        "TEXT"),
-        ("llm_confidence",     "INTEGER"),
-        ("llm_reasoning",      "TEXT"),
-        ("llm_model",          "TEXT"),
-        ("panel_method",       "TEXT"),
-        ("vcp_detected",       "INTEGER"),
+        ("swing_low", "REAL"),
+        ("llm_verdict", "TEXT"),
+        ("llm_confidence", "INTEGER"),
+        ("llm_reasoning", "TEXT"),
+        ("llm_model", "TEXT"),
+        ("panel_method", "TEXT"),
+        ("vcp_detected", "INTEGER"),
         ("bull_flag_detected", "INTEGER"),
-        ("pattern_score",      "INTEGER"),
+        ("pattern_score", "INTEGER"),
     ]:
-        try:
-            cur.execute(f"ALTER TABLE breakout_log ADD COLUMN {col} {typedef}")
-        except sqlite3.OperationalError:
-            pass   # column already exists
+        _add_column(conn, T_BREAKOUT_LOG, col, typedef)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS llm_evaluations (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_LLM_EVALUATIONS} (
+            id             {id_type} PRIMARY KEY,
             scan_date      TEXT NOT NULL,
             symbol         TEXT NOT NULL,
             panel_method   TEXT NOT NULL,
@@ -104,30 +136,31 @@ def init_db():
             verdict        TEXT NOT NULL,
             confidence     INTEGER,
             reasoning      TEXT,
-            created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+            created_at     {now_default},
+            updated_at     {now_default},
             UNIQUE(scan_date, symbol, panel_method, llm_model)
         )
     """)
-    cur.execute("""
+    execute(conn, f"""
         CREATE INDEX IF NOT EXISTS idx_llm_eval_symbol_date
-        ON llm_evaluations(symbol, scan_date)
+        ON {T_LLM_EVALUATIONS}(symbol, scan_date)
     """)
-    cur.execute("""
-        INSERT OR IGNORE INTO llm_evaluations
+    execute(conn, f"""
+        INSERT INTO {T_LLM_EVALUATIONS}
             (scan_date, symbol, panel_method, llm_model, verdict, confidence, reasoning)
         SELECT scan_date, symbol,
                COALESCE(NULLIF(panel_method, ''), 'LEGACY'),
                COALESCE(NULLIF(llm_model, ''), 'legacy'),
                llm_verdict, llm_confidence, llm_reasoning
-        FROM breakout_log
+        FROM {T_BREAKOUT_LOG}
         WHERE llm_verdict IS NOT NULL
           AND llm_verdict NOT IN ('', 'SKIPPED')
+        ON CONFLICT(scan_date, symbol, panel_method, llm_model) DO NOTHING
     """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS catalyst_events (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_CATALYST_EVENTS} (
+            id             {id_type} PRIMARY KEY,
             event_date     TEXT NOT NULL,
             symbol         TEXT NOT NULL,
             source         TEXT NOT NULL,
@@ -140,31 +173,27 @@ def init_db():
             theme          TEXT,
             mapping_source TEXT,
             raw_payload    TEXT,
-            fetched_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+            fetched_at     {now_default},
             UNIQUE(event_date, symbol, source, title)
         )
     """)
     for col, typedef in [
-        ("confidence",     "INTEGER DEFAULT 0"),
-        ("theme",          "TEXT"),
+        ("confidence", "INTEGER DEFAULT 0"),
+        ("theme", "TEXT"),
         ("mapping_source", "TEXT"),
     ]:
-        try:
-            cur.execute(f"ALTER TABLE catalyst_events ADD COLUMN {col} {typedef}")
-        except sqlite3.OperationalError:
-            pass
-    cur.execute("""
+        _add_column(conn, T_CATALYST_EVENTS, col, typedef)
+    execute(conn, f"""
         CREATE INDEX IF NOT EXISTS idx_catalyst_symbol_date
-        ON catalyst_events(symbol, event_date)
+        ON {T_CATALYST_EVENTS}(symbol, event_date)
     """)
 
-    # == invalid_instruments: persistent blacklist of ETFs and no-data symbols
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS invalid_instruments (
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_INVALID_INSTRUMENTS} (
             symbol   TEXT PRIMARY KEY,
-            reason   TEXT NOT NULL,   -- 'ETF' | 'NO_DATA' | 'MANUAL'
-            source   TEXT NOT NULL,   -- 'AUTO_ETF' | 'SCAN_EMPTY' | 'MANUAL'
-            added_at TEXT DEFAULT (datetime('now'))
+            reason   TEXT NOT NULL,
+            source   TEXT NOT NULL,
+            added_at {now_default}
         )
     """)
 
@@ -175,50 +204,42 @@ def init_db():
 
 def save_signal(symbol, signal_type, price, reason):
     conn = get_conn()
-    from datetime import date
-    conn.execute(
-        "INSERT INTO signals (symbol, signal_date, signal_type, price, reason) VALUES (?,?,?,?,?)",
-        (symbol, str(date.today()), signal_type, price, reason)
+    execute(
+        conn,
+        f"INSERT INTO {T_SIGNALS} (symbol, signal_date, signal_type, price, reason) VALUES (?,?,?,?,?)",
+        (symbol, str(date.today()), signal_type, price, reason),
     )
     conn.commit()
     conn.close()
 
 
-def open_position(symbol, buy_price, target_price, stop_loss_price,
-                  trailing_stop_price=None):
-    """Open a new position. trailing_stop_price defaults to stop_loss_price."""
+def open_position(symbol, buy_price, target_price, stop_loss_price, trailing_stop_price=None):
     conn = get_conn()
-    from datetime import date
     trail = trailing_stop_price if trailing_stop_price is not None else stop_loss_price
     try:
-        conn.execute("""
-            INSERT INTO positions
-                (symbol, buy_date, buy_price, target_price,
-                 stop_loss_price, trailing_stop_price)
+        execute(conn, f"""
+            INSERT INTO {T_POSITIONS}
+                (symbol, buy_date, buy_price, target_price, stop_loss_price, trailing_stop_price)
             VALUES (?,?,?,?,?,?)
-        """, (symbol, str(date.today()), buy_price, target_price,
-              stop_loss_price, trail))
+        """, (symbol, str(date.today()), buy_price, target_price, stop_loss_price, trail))
         conn.commit()
-    except sqlite3.IntegrityError:
-        pass   # already have open position in this stock
+    except integrity_error_types():
+        conn.rollback()
     conn.close()
+
 
 def reset_positions():
     conn = get_conn()
-    conn.execute("DELETE FROM positions")
+    execute(conn, f"DELETE FROM {T_POSITIONS}")
     conn.commit()
     conn.close()
     print("Cleared all old positions!")
 
 
 def update_trailing_stop(symbol: str, new_trail: float):
-    """
-    Ratchet the trailing stop UP only == never move it down.
-    Uses a single SQL conditional update to avoid a race condition.
-    """
     conn = get_conn()
-    conn.execute("""
-        UPDATE positions
+    execute(conn, f"""
+        UPDATE {T_POSITIONS}
         SET trailing_stop_price = ?
         WHERE symbol = ?
           AND status = 'OPEN'
@@ -230,16 +251,15 @@ def update_trailing_stop(symbol: str, new_trail: float):
 
 def get_open_positions() -> list:
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM positions WHERE status='OPEN'").fetchall()
+    rows = execute(conn, f"SELECT * FROM {T_POSITIONS} WHERE status='OPEN'").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def close_position(symbol, exit_price, pnl_pct):
     conn = get_conn()
-    from datetime import date
-    conn.execute("""
-        UPDATE positions
+    execute(conn, f"""
+        UPDATE {T_POSITIONS}
         SET status='CLOSED', exit_price=?, exit_date=?, pnl_pct=?
         WHERE symbol=? AND status='OPEN'
     """, (exit_price, str(date.today()), pnl_pct, symbol))
@@ -247,31 +267,14 @@ def close_position(symbol, exit_price, pnl_pct):
     conn.close()
 
 
-# == Breakout Log ===========================================================
-
-def get_llm_verdict_cache(
-    scan_date: str,
-    panel_method: str | None = None,
-    llm_model: str | None = None,
-) -> dict:
-    """
-    Return already-validated LLM verdicts for a given scan_date.
-    Only returns rows where llm_verdict is a real verdict (not SKIPPED).
-    Result: {symbol: {llm_verdict, llm_confidence, llm_reasoning}}
-    Used to skip LLM API calls for signals already validated today.
-
-    When panel_method/llm_model are provided, only cache entries produced by
-    that validator/model are reused. This prevents Grok runs from reusing Gemini
-    verdicts, and also forces old rows with missing model metadata to be
-    revalidated once.
-    """
+def get_llm_verdict_cache(scan_date: str, panel_method: str | None = None, llm_model: str | None = None) -> dict:
     conn = get_conn()
-    sql = """
+    sql = f"""
         SELECT symbol, verdict, confidence, reasoning, panel_method, llm_model
-        FROM   llm_evaluations
-        WHERE  scan_date = ?
-          AND  verdict NOT IN ('SKIPPED', '')
-          AND  verdict IS NOT NULL
+        FROM {T_LLM_EVALUATIONS}
+        WHERE scan_date = ?
+          AND verdict NOT IN ('SKIPPED', '')
+          AND verdict IS NOT NULL
     """
     params = [scan_date]
     if panel_method:
@@ -280,25 +283,24 @@ def get_llm_verdict_cache(
     if llm_model:
         sql += " AND llm_model = ?"
         params.append(llm_model)
-    rows = conn.execute(sql, params).fetchall()
+    rows = execute(conn, sql, params).fetchall()
     conn.close()
     return {
         r["symbol"]: {
-            "llm_verdict":    r["verdict"],
+            "llm_verdict": r["verdict"],
             "llm_confidence": r["confidence"],
-            "llm_reasoning":  r["reasoning"],
-            "panel_method":   r["panel_method"],
-            "llm_model":      r["llm_model"],
+            "llm_reasoning": r["reasoning"],
+            "panel_method": r["panel_method"],
+            "llm_model": r["llm_model"],
         }
         for r in rows
     }
 
 
 def save_breakout_log(scan_date: str, sig: dict):
-    """Insert/update a signal row and store its LLM evaluation separately."""
     conn = get_conn()
-    conn.execute("""
-        INSERT INTO breakout_log
+    execute(conn, f"""
+        INSERT INTO {T_BREAKOUT_LOG}
             (scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
              stage, ema20, ema50, atr14, swing_low, reasons,
              llm_verdict, llm_confidence, llm_reasoning,
@@ -371,8 +373,8 @@ def save_breakout_log(scan_date: str, sig: dict):
     panel_method = sig.get("panel_method")
     llm_model = sig.get("llm_model")
     if verdict and verdict not in ("", "SKIPPED") and panel_method and llm_model:
-        conn.execute("""
-            INSERT INTO llm_evaluations
+        execute(conn, f"""
+            INSERT INTO {T_LLM_EVALUATIONS}
                 (scan_date, symbol, panel_method, llm_model, verdict,
                  confidence, reasoning, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -394,28 +396,32 @@ def save_breakout_log(scan_date: str, sig: dict):
     conn.close()
 
 
-# == Catalyst Events =======================================================
-
 def save_catalyst_events(events: list[dict]) -> int:
-    """Insert/update catalyst events and return number of newly inserted rows."""
     if not events:
         return 0
-    normalised = []
+    rows = []
     for event in events:
-        row = dict(event)
-        row.setdefault("confidence", 0)
-        row.setdefault("theme", None)
-        row.setdefault("mapping_source", None)
-        normalised.append(row)
+        rows.append((
+            event.get("event_date"),
+            event.get("symbol"),
+            event.get("source"),
+            event.get("category"),
+            event.get("title"),
+            event.get("summary"),
+            event.get("url"),
+            event.get("score", 0),
+            event.get("confidence", 0),
+            event.get("theme"),
+            event.get("mapping_source"),
+            event.get("raw_payload"),
+        ))
     conn = get_conn()
-    before = conn.total_changes
-    conn.executemany("""
-        INSERT INTO catalyst_events
+    before = getattr(conn, "total_changes", 0)
+    executemany(conn, f"""
+        INSERT INTO {T_CATALYST_EVENTS}
             (event_date, symbol, source, category, title, summary, url,
              score, confidence, theme, mapping_source, raw_payload)
-        VALUES
-            (:event_date, :symbol, :source, :category, :title, :summary, :url,
-             :score, :confidence, :theme, :mapping_source, :raw_payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(event_date, symbol, source, title) DO UPDATE SET
             category=excluded.category,
             summary=excluded.summary,
@@ -426,79 +432,77 @@ def save_catalyst_events(events: list[dict]) -> int:
             mapping_source=excluded.mapping_source,
             raw_payload=excluded.raw_payload,
             fetched_at=datetime('now')
-    """, normalised)
+    """, rows)
     conn.commit()
-    inserted_or_updated = conn.total_changes - before
+    if is_postgres():
+        changed = len(rows)
+    else:
+        changed = getattr(conn, "total_changes", 0) - before
     conn.close()
-    return inserted_or_updated
+    return changed
 
 
 def get_catalyst_events(upto_date: str, lookback_days: int = 7, min_score: int = 0) -> list[dict]:
-    """Return recent catalyst events up to upto_date."""
+    cutoff = (date.fromisoformat(upto_date) - timedelta(days=lookback_days)).isoformat()
     conn = get_conn()
-    rows = conn.execute("""
+    rows = execute(conn, f"""
         SELECT event_date, symbol, source, category, title, summary, url,
                score, confidence, theme, mapping_source
-        FROM catalyst_events
-        WHERE event_date >= date(?, ?)
+        FROM {T_CATALYST_EVENTS}
+        WHERE event_date >= ?
           AND event_date <= ?
           AND score >= ?
         ORDER BY score DESC, event_date DESC
-    """, (upto_date, f"-{lookback_days} days", upto_date, min_score)).fetchall()
+    """, (cutoff, upto_date, min_score)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
-# == Invalid Instruments Blacklist =========================================
 
 def add_invalid_instrument(symbol: str, reason: str, source: str) -> None:
-    """Add a single symbol to the blacklist (INSERT OR IGNORE - safe to call repeatedly)."""
     conn = get_conn()
-    conn.execute(
-        "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source) VALUES (?, ?, ?)",
-        (symbol, reason, source),
-    )
+    execute(conn, f"""
+        INSERT INTO {T_INVALID_INSTRUMENTS} (symbol, reason, source)
+        VALUES (?, ?, ?)
+        ON CONFLICT(symbol) DO NOTHING
+    """, (symbol, reason, source))
     conn.commit()
     conn.close()
 
 
 def bulk_add_invalid_instruments(rows: list) -> int:
-    """Bulk-insert symbols into the blacklist.
-    Each element must be a dict with keys: symbol, reason, source.
-    Uses INSERT OR IGNORE - safe to re-run every scan (duplicates are skipped).
-    Returns the number of newly inserted rows."""
     if not rows:
         return 0
+    params = [(row["symbol"], row["reason"], row["source"]) for row in rows]
     conn = get_conn()
-    cur = conn.executemany(
-        "INSERT OR IGNORE INTO invalid_instruments (symbol, reason, source)"
-        " VALUES (:symbol, :reason, :source)",
-        rows,
-    )
-    added = cur.rowcount
+    before = getattr(conn, "total_changes", 0)
+    executemany(conn, f"""
+        INSERT INTO {T_INVALID_INSTRUMENTS} (symbol, reason, source)
+        VALUES (?, ?, ?)
+        ON CONFLICT(symbol) DO NOTHING
+    """, params)
     conn.commit()
+    added = len(params) if is_postgres() else getattr(conn, "total_changes", 0) - before
     conn.close()
     return added
 
 
 def get_invalid_symbols() -> set:
-    """Return the full set of blacklisted symbols for O(1) scan-loop filtering."""
     conn = get_conn()
-    rows = conn.execute("SELECT symbol FROM invalid_instruments").fetchall()
+    rows = execute(conn, f"SELECT symbol FROM {T_INVALID_INSTRUMENTS}").fetchall()
     conn.close()
     return {r["symbol"] for r in rows}
 
 
 def get_breakout_log(days: int = 30) -> pd.DataFrame:
-    """Return the last `days` worth of breakout_log rows as a DataFrame."""
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
     conn = get_conn()
-    df = pd.read_sql(
-        """
+    df = read_dataframe(conn, f"""
         WITH latest_eval AS (
             SELECT *
-            FROM llm_evaluations
+            FROM {T_LLM_EVALUATIONS}
             WHERE id IN (
                 SELECT MAX(id)
-                FROM llm_evaluations
+                FROM {T_LLM_EVALUATIONS}
                 GROUP BY scan_date, symbol
             )
         )
@@ -511,31 +515,22 @@ def get_breakout_log(days: int = 30) -> pd.DataFrame:
                COALESCE(le.panel_method, b.panel_method) AS panel_method,
                COALESCE(le.llm_model, b.llm_model) AS llm_model,
                b.created_at
-        FROM   breakout_log b
+        FROM {T_BREAKOUT_LOG} b
         LEFT JOIN latest_eval le
           ON le.scan_date = b.scan_date
          AND le.symbol = b.symbol
-        WHERE  b.scan_date >= date('now', ?)
-        ORDER  BY b.scan_date DESC, b.score DESC
-        """,
-        conn,
-        params=(f"-{days} days",),
-    )
+        WHERE b.scan_date >= ?
+        ORDER BY b.scan_date DESC, b.score DESC
+    """, (cutoff,))
     conn.close()
     return df
 
 
 def delete_breakout_log(scan_date: str) -> int:
-    """Delete all breakout_log rows for a specific scan_date. Returns rows deleted."""
     conn = get_conn()
-    conn.execute(
-        "DELETE FROM llm_evaluations WHERE scan_date = ?", (scan_date,)
-    )
-    cur = conn.execute(
-        "DELETE FROM breakout_log WHERE scan_date = ?", (scan_date,)
-    )
-    deleted = cur.rowcount
+    execute(conn, f"DELETE FROM {T_LLM_EVALUATIONS} WHERE scan_date = ?", (scan_date,))
+    cur = execute(conn, f"DELETE FROM {T_BREAKOUT_LOG} WHERE scan_date = ?", (scan_date,))
+    deleted = getattr(cur, "rowcount", 0)
     conn.commit()
     conn.close()
     return deleted
-

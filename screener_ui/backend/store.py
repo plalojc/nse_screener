@@ -1,100 +1,175 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Any
 
+from data.db_backend import (
+    connect,
+    ensure_schemas,
+    execute,
+    is_postgres,
+    read_dataframe,
+    system_schema,
+    table_name,
+    user_schema,
+)
+
 from .settings import BHAVCOPY_DB_PATH, UI_DB_PATH
 
 
-def _connect(path: Path = UI_DB_PATH) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
+T_WATCHLIST = table_name("watchlist", user_schema())
+T_HOLDINGS = table_name("holdings", user_schema())
+T_HOLDING_SALES = table_name("holding_sales", user_schema())
+T_UI_SETTINGS = table_name("ui_settings", user_schema())
+T_BHAVCOPY_OHLCV = table_name("bhavcopy_ohlcv", system_schema())
+
+
+def _connect(path: Path = UI_DB_PATH):
+    return connect(path)
+
+
+def _id_type() -> str:
+    return "BIGSERIAL" if is_postgres() else "INTEGER"
+
+
+def _now_default() -> str:
+    return "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP" if is_postgres() else "TEXT DEFAULT (datetime('now'))"
 
 
 def init_store() -> None:
     with _connect() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS watchlist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ensure_schemas(conn)
+        id_type = _id_type()
+        now_default = _now_default()
+        execute(conn, f"""
+            CREATE TABLE IF NOT EXISTS {T_WATCHLIST} (
+                id INTEGER PRIMARY KEY,
                 symbol TEXT NOT NULL UNIQUE,
                 notes TEXT,
                 target_price REAL,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
+                created_at {now_default},
+                updated_at {now_default}
             )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS holdings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+        """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        execute(conn, f"""
+            CREATE TABLE IF NOT EXISTS {T_HOLDINGS} (
+                id INTEGER PRIMARY KEY,
                 symbol TEXT NOT NULL,
                 buy_date TEXT NOT NULL,
                 quantity REAL NOT NULL,
                 buy_price REAL NOT NULL,
                 invested_amount REAL NOT NULL,
                 notes TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
+                created_at {now_default},
+                updated_at {now_default}
             )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS ui_settings (
+        """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        execute(conn, f"""
+            CREATE TABLE IF NOT EXISTS {T_HOLDING_SALES} (
+                id INTEGER PRIMARY KEY,
+                holding_id INTEGER,
+                symbol TEXT NOT NULL,
+                sell_date TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                sell_price REAL NOT NULL,
+                sell_amount REAL NOT NULL,
+                realized_profit_loss REAL,
+                notes TEXT,
+                created_at {now_default}
+            )
+        """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        execute(conn, f"""
+            CREATE TABLE IF NOT EXISTS {T_UI_SETTINGS} (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
-                updated_at TEXT DEFAULT (datetime('now'))
+                updated_at {now_default}
             )
         """)
+        conn.commit()
 
 
-def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
 def add_watchlist(symbol: str, notes: str = "", target_price: float | None = None) -> dict:
     symbol = symbol.strip().upper()
     with _connect() as conn:
-        conn.execute("""
-            INSERT INTO watchlist (symbol, notes, target_price, updated_at)
+        execute(conn, f"""
+            INSERT INTO {T_WATCHLIST} (symbol, notes, target_price, updated_at)
             VALUES (?, ?, ?, datetime('now'))
             ON CONFLICT(symbol) DO UPDATE SET
                 notes=excluded.notes,
                 target_price=excluded.target_price,
                 updated_at=datetime('now')
         """, (symbol, notes.strip(), target_price))
-        row = conn.execute("SELECT * FROM watchlist WHERE symbol=?", (symbol,)).fetchone()
+        row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
+        conn.commit()
     return _row_to_dict(row) or {}
 
 
 def list_watchlist() -> list[dict]:
     with _connect() as conn:
-        rows = conn.execute("SELECT * FROM watchlist ORDER BY updated_at DESC, symbol").fetchall()
+        rows = execute(conn, f"SELECT * FROM {T_WATCHLIST} ORDER BY updated_at DESC, symbol").fetchall()
     return [dict(row) for row in rows]
+
+
+def update_watchlist(item_id: int, payload: dict[str, Any]) -> dict | None:
+    target_price = payload.get("target_price")
+    notes = str(payload.get("notes") or "").strip()
+    with _connect() as conn:
+        if is_postgres():
+            row = execute(conn, f"""
+                UPDATE {T_WATCHLIST}
+                SET notes=?, target_price=?, updated_at=datetime('now')
+                WHERE id=?
+                RETURNING *
+            """, (notes, target_price, item_id)).fetchone()
+        else:
+            execute(conn, f"""
+                UPDATE {T_WATCHLIST}
+                SET notes=?, target_price=?, updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, target_price, item_id))
+            row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE id=?", (item_id,)).fetchone()
+        conn.commit()
+    return _row_to_dict(row)
 
 
 def delete_watchlist(item_id: int) -> None:
     with _connect() as conn:
-        conn.execute("DELETE FROM watchlist WHERE id=?", (item_id,))
+        execute(conn, f"DELETE FROM {T_WATCHLIST} WHERE id=?", (item_id,))
+        conn.commit()
 
 
-def add_holding(
-    symbol: str,
-    buy_date: str,
-    quantity: float,
-    buy_price: float,
-    notes: str = "",
-) -> dict:
+def clear_watchlist() -> int:
+    with _connect() as conn:
+        cur = execute(conn, f"DELETE FROM {T_WATCHLIST}")
+        deleted = getattr(cur, "rowcount", 0)
+        conn.commit()
+    return deleted
+
+
+def add_holding(symbol: str, buy_date: str, quantity: float, buy_price: float, notes: str = "") -> dict:
     symbol = symbol.strip().upper()
     invested = round(float(quantity) * float(buy_price), 2)
     with _connect() as conn:
-        cur = conn.execute("""
-            INSERT INTO holdings
-                (symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-        """, (symbol, buy_date, quantity, buy_price, invested, notes.strip()))
-        row = conn.execute("SELECT * FROM holdings WHERE id=?", (cur.lastrowid,)).fetchone()
+        if is_postgres():
+            row = execute(conn, f"""
+                INSERT INTO {T_HOLDINGS}
+                    (symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                RETURNING *
+            """, (symbol, buy_date, quantity, buy_price, invested, notes.strip())).fetchone()
+        else:
+            cur = execute(conn, f"""
+                INSERT INTO {T_HOLDINGS}
+                    (symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (symbol, buy_date, quantity, buy_price, invested, notes.strip()))
+            row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (cur.lastrowid,)).fetchone()
+        conn.commit()
     return enrich_holding(_row_to_dict(row) or {})
 
 
@@ -110,52 +185,133 @@ def update_holding(item_id: int, payload: dict[str, Any]) -> dict | None:
     invested = round(quantity * buy_price, 2)
 
     with _connect() as conn:
-        conn.execute("""
-            UPDATE holdings
-            SET symbol=?, buy_date=?, quantity=?, buy_price=?,
-                invested_amount=?, notes=?, updated_at=datetime('now')
-            WHERE id=?
-        """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id))
-        row = conn.execute("SELECT * FROM holdings WHERE id=?", (item_id,)).fetchone()
+        if is_postgres():
+            row = execute(conn, f"""
+                UPDATE {T_HOLDINGS}
+                SET symbol=?, buy_date=?, quantity=?, buy_price=?,
+                    invested_amount=?, notes=?, updated_at=datetime('now')
+                WHERE id=?
+                RETURNING *
+            """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id)).fetchone()
+        else:
+            execute(conn, f"""
+                UPDATE {T_HOLDINGS}
+                SET symbol=?, buy_date=?, quantity=?, buy_price=?,
+                    invested_amount=?, notes=?, updated_at=datetime('now')
+                WHERE id=?
+            """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id))
+            row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (item_id,)).fetchone()
+        conn.commit()
     return enrich_holding(_row_to_dict(row) or {})
 
 
 def get_holding(item_id: int) -> dict | None:
     with _connect() as conn:
-        row = conn.execute("SELECT * FROM holdings WHERE id=?", (item_id,)).fetchone()
+        row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (item_id,)).fetchone()
     return _row_to_dict(row)
 
 
 def list_holdings() -> list[dict]:
     with _connect() as conn:
-        rows = conn.execute("SELECT * FROM holdings ORDER BY buy_date DESC, id DESC").fetchall()
+        rows = execute(conn, f"SELECT * FROM {T_HOLDINGS} ORDER BY buy_date DESC, id DESC").fetchall()
     return [enrich_holding(dict(row)) for row in rows]
 
 
 def delete_holding(item_id: int) -> None:
     with _connect() as conn:
-        conn.execute("DELETE FROM holdings WHERE id=?", (item_id,))
+        execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE id=?", (item_id,))
+        conn.commit()
+
+
+def sell_holding(
+    item_id: int,
+    sell_date: str,
+    quantity: float,
+    sell_price: float,
+    notes: str = "",
+) -> dict[str, Any] | None:
+    holding = get_holding(item_id)
+    if not holding:
+        return None
+
+    sell_qty = float(quantity)
+    held_qty = float(holding["quantity"])
+    if sell_qty <= 0 or sell_qty > held_qty:
+        raise ValueError("Sell quantity must be greater than 0 and not more than current quantity")
+
+    buy_price = float(holding["buy_price"])
+    sell_amount = round(sell_qty * float(sell_price), 2)
+    realized = round((float(sell_price) - buy_price) * sell_qty, 2)
+    remaining_qty = round(held_qty - sell_qty, 6)
+
+    with _connect() as conn:
+        execute(conn, f"""
+            INSERT INTO {T_HOLDING_SALES}
+                (holding_id, symbol, sell_date, quantity, sell_price,
+                 sell_amount, realized_profit_loss, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            item_id,
+            holding["symbol"],
+            sell_date,
+            sell_qty,
+            sell_price,
+            sell_amount,
+            realized,
+            notes.strip(),
+        ))
+        if remaining_qty <= 0:
+            execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE id=?", (item_id,))
+            next_holding = None
+        else:
+            remaining_invested = round(remaining_qty * buy_price, 2)
+            execute(conn, f"""
+                UPDATE {T_HOLDINGS}
+                SET quantity=?, invested_amount=?, updated_at=datetime('now')
+                WHERE id=?
+            """, (remaining_qty, remaining_invested, item_id))
+            next_holding = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (item_id,)).fetchone()
+        conn.commit()
+
+    return {
+        "status": "sold",
+        "symbol": holding["symbol"],
+        "sold_quantity": sell_qty,
+        "sell_amount": sell_amount,
+        "realized_profit_loss": realized,
+        "holding": enrich_holding(_row_to_dict(next_holding) or {}) if next_holding else None,
+    }
 
 
 def set_setting(key: str, value: str) -> None:
     with _connect() as conn:
-        conn.execute("""
-            INSERT INTO ui_settings (key, value, updated_at)
+        execute(conn, f"""
+            INSERT INTO {T_UI_SETTINGS} (key, value, updated_at)
             VALUES (?, ?, datetime('now'))
             ON CONFLICT(key) DO UPDATE SET
                 value=excluded.value,
                 updated_at=datetime('now')
         """, (key, value))
+        conn.commit()
 
 
 def get_setting(key: str, default: str = "") -> str:
     with _connect() as conn:
-        row = conn.execute("SELECT value FROM ui_settings WHERE key=?", (key,)).fetchone()
+        row = execute(conn, f"SELECT value FROM {T_UI_SETTINGS} WHERE key=?", (key,)).fetchone()
     return str(row["value"]) if row else default
 
 
+def get_settings(keys: dict[str, str]) -> dict[str, str]:
+    values = {}
+    with _connect() as conn:
+        for key, default in keys.items():
+            row = execute(conn, f"SELECT value FROM {T_UI_SETTINGS} WHERE key=?", (key,)).fetchone()
+            values[key] = str(row["value"]) if row else default
+    return values
+
+
 def latest_prices(symbols: list[str] | None = None) -> dict[str, dict[str, Any]]:
-    if not BHAVCOPY_DB_PATH.exists():
+    if not is_postgres() and not BHAVCOPY_DB_PATH.exists():
         return {}
     params: tuple[Any, ...] = ()
     where = ""
@@ -167,22 +323,25 @@ def latest_prices(symbols: list[str] | None = None) -> dict[str, dict[str, Any]]
     sql = f"""
         WITH latest AS (
             SELECT symbol, MAX(date) AS max_date
-            FROM bhavcopy_ohlcv
+            FROM {T_BHAVCOPY_OHLCV}
             {where}
             GROUP BY symbol
         )
         SELECT b.symbol, b.date, b.close
-        FROM bhavcopy_ohlcv b
+        FROM {T_BHAVCOPY_OHLCV} b
         JOIN latest l ON l.symbol=b.symbol AND l.max_date=b.date
     """
     try:
-        conn = sqlite3.connect(BHAVCOPY_DB_PATH)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
-    except sqlite3.Error:
+        with _connect(BHAVCOPY_DB_PATH) as conn:
+            df = read_dataframe(conn, sql, params)
+    except Exception:
         return {}
-    return {row["symbol"]: {"date": row["date"], "close": row["close"]} for row in rows}
+    if df.empty:
+        return {}
+    return {
+        row["symbol"]: {"date": row["date"], "close": row["close"]}
+        for row in df.to_dict("records")
+    }
 
 
 def enrich_holding(row: dict[str, Any]) -> dict[str, Any]:
