@@ -113,7 +113,7 @@ _PAGE_HEAD = """\
         }}
         async function addToWatchlist(symbol, button) {{
             try {{
-                await fetch("/api/watchlist", {{
+                var response = await fetch("/api/watchlist", {{
                     method: "POST",
                     headers: {{ "Content-Type": "application/json" }},
                     body: JSON.stringify({{
@@ -122,8 +122,9 @@ _PAGE_HEAD = """\
                         target_price: null
                     }})
                 }});
+                var payload = await response.json();
                 button.classList.add("added");
-                button.textContent = "Added";
+                button.textContent = payload && payload.created === false ? "Exists" : "Added";
             }} catch (err) {{
                 button.textContent = "Failed";
             }}

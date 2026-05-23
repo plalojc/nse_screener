@@ -96,17 +96,19 @@ def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
 def add_watchlist(symbol: str, notes: str = "", target_price: float | None = None) -> dict:
     symbol = symbol.strip().upper()
     with _connect() as conn:
-        execute(conn, f"""
-            INSERT INTO {T_WATCHLIST} (symbol, notes, target_price, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(symbol) DO UPDATE SET
-                notes=excluded.notes,
-                target_price=excluded.target_price,
-                updated_at=datetime('now')
-        """, (symbol, notes.strip(), target_price))
-        row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
+        existing = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
+        if existing:
+            row = existing
+        else:
+            execute(conn, f"""
+                INSERT INTO {T_WATCHLIST} (symbol, notes, target_price, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+            """, (symbol, notes.strip(), target_price))
+            row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
         conn.commit()
-    return _row_to_dict(row) or {}
+    result = _row_to_dict(row) or {}
+    result["created"] = not bool(existing)
+    return result
 
 
 def list_watchlist() -> list[dict]:

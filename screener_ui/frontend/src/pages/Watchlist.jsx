@@ -40,7 +40,7 @@ export function Watchlist() {
 
   async function save(event) {
     event.preventDefault();
-    await api("/api/watchlist", {
+    const saved = await api("/api/watchlist", {
       method: "POST",
       body: JSON.stringify({
         ...form,
@@ -48,7 +48,7 @@ export function Watchlist() {
       })
     });
     setForm({ symbol: "", target_price: "", notes: "" });
-    setMessage("Watchlist item added.");
+    setMessage(saved.created === false ? `${saved.symbol} already exists in Watchlist.` : "Watchlist item added.");
     refresh();
   }
 
