@@ -1,0 +1,126 @@
+import { useEffect, useState } from "react";
+import { Search } from "lucide-react";
+import { api } from "../api.js";
+import { Metric } from "../components/Metric.jsx";
+import { Notice } from "../components/Notice.jsx";
+import { PageTitle } from "../components/PageTitle.jsx";
+import { money, number } from "../utils/format.js";
+
+function todayInputValue() {
+  const now = new Date();
+  const tzOffsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+}
+
+function monthStartValue() {
+  const today = todayInputValue();
+  return `${today.slice(0, 8)}01`;
+}
+
+function pnlClass(value) {
+  return Number(value || 0) >= 0 ? "gain" : "loss";
+}
+
+export function ProfitLossReport() {
+  const [fromDate, setFromDate] = useState(monthStartValue());
+  const [toDate, setToDate] = useState(todayInputValue());
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadReport(event) {
+    event?.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      setData(await api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`));
+    } catch (err) {
+      setError(err.message || "Unable to load P/L report");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadReport();
+  }, []);
+
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+
+  return (
+    <section>
+      <PageTitle title="P/L Report" />
+      {error && <Notice tone="danger">{error}</Notice>}
+      <div className="panel">
+        <form className="plFilterForm" onSubmit={loadReport}>
+          <label>
+            From date
+            <input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} required />
+          </label>
+          <label>
+            To date
+            <input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} required />
+          </label>
+          <button type="submit" disabled={loading}>
+            <Search size={16} />Get Report
+          </button>
+        </form>
+
+        <div className="metricGrid plMetricGrid">
+          <Metric label="Total Buy" value={money(summary.total_buy_amount)} />
+          <Metric label="Total Sell" value={money(summary.total_sell_amount)} />
+          <Metric label="Profit / Loss" value={money(summary.profit_loss)} tone={pnlClass(summary.profit_loss)} />
+        </div>
+
+        <div>
+          <table className="holdingsTable plTable">
+            <thead>
+              <tr>
+                <th className="slCol">SL</th>
+                <th>Symbol</th>
+                <th>Quantity</th>
+                <th className="buyCol">Buy Date</th>
+                <th className="buyCol">Buy Price</th>
+                <th className="buyCol">Buy Amount</th>
+                <th className="sellCol">Sell Date</th>
+                <th className="sellCol">Sell Price</th>
+                <th className="sellCol">Sell Amount</th>
+                <th>P/L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length ? rows.map((row, index) => (
+                <tr key={`${row.symbol}-${row.sell_date}-${index}`}>
+                  <td className="slCol">{index + 1}</td>
+                  <td><strong>{row.symbol}</strong></td>
+                  <td>{number(row.quantity)}</td>
+                  <td className="buyCol">{row.buy_date || "-"}</td>
+                  <td className="buyCol">{money(row.buy_price)}</td>
+                  <td className="buyCol">{money(row.buy_amount)}</td>
+                  <td className="sellCol">{row.sell_date || "-"}</td>
+                  <td className="sellCol">{money(row.sell_price)}</td>
+                  <td className="sellCol">{money(row.sell_amount)}</td>
+                  <td className={`pnlCol ${pnlClass(row.profit_loss)}`}>
+                    {row.profit_loss === null || row.profit_loss === undefined ? "-" : money(row.profit_loss)}
+                  </td>
+                </tr>
+              )) : (
+                <tr><td colSpan="10">{loading ? "Loading..." : "No sold shares in this date range."}</td></tr>
+              )}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan="5"><strong>Total</strong></td>
+                <td><strong>{money(summary.total_buy_amount)}</strong></td>
+                <td colSpan="2" />
+                <td><strong>{money(summary.total_sell_amount)}</strong></td>
+                <td className={`pnlCol ${pnlClass(summary.profit_loss)}`}><strong>{money(summary.profit_loss)}</strong></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}

@@ -245,6 +245,24 @@ select:focus {
   margin-bottom: 14px;
 }
 
+.plFilterForm {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 180px 180px auto 1fr;
+  margin-bottom: 14px;
+}
+
+.plFilterForm label {
+  display: grid;
+  gap: 5px;
+}
+
+.plMetricGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0 0 14px;
+}
+
 .sellForm {
   background: #f8fbff;
   border: 1px solid #d8e0ea;
@@ -536,6 +554,40 @@ th {
   table-layout: auto;
 }
 
+.plTable {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.plTable td.buyCol {
+  background: #eaf7ef;
+  color: #111827;
+}
+
+.plTable td.sellCol {
+  background: #fff1f1;
+  color: #111827;
+}
+
+.plTable th.buyCol,
+.plTable th.sellCol {
+  background: #2f3d4f;
+  color: white;
+  font-weight: 800;
+}
+
+.plTable td.pnlCol.gain {
+  background: #eef8f1;
+  color: #1f6b3d;
+  font-weight: 700;
+}
+
+.plTable td.pnlCol.loss {
+  background: #fff3f1;
+  color: #9f2f23;
+  font-weight: 700;
+}
+
 .watchlistTable,
 .holdingsTable {
   border: 1px solid #cbd5e1;
@@ -812,6 +864,7 @@ tr:hover .hoverActionCell .slAddBtn {
   .metricGrid,
   .inlineForm,
   .holdingForm,
+  .plFilterForm,
   .sellForm,
   .modalFormGrid,
   .settingsForm {

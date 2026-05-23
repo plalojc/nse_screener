@@ -3,6 +3,7 @@ import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { Dashboard } from "./pages/Dashboard.jsx";
 import { Holdings } from "./pages/Holdings.jsx";
+import { ProfitLossReport } from "./pages/ProfitLossReport.jsx";
 import { Reports } from "./pages/Reports.jsx";
 import { Settings } from "./pages/Settings.jsx";
 import { Watchlist } from "./pages/Watchlist.jsx";
@@ -27,6 +28,7 @@ export default function App() {
         {active === "reports" && <Reports />}
         {active === "watchlist" && <Watchlist />}
         {active === "holdings" && <Holdings />}
+        {active === "profitLoss" && <ProfitLossReport />}
         {active === "settings" && <Settings />}
       </main>
     </div>

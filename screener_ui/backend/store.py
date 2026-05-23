@@ -76,6 +76,9 @@ def init_store() -> None:
                 symbol TEXT NOT NULL,
                 sell_date TEXT NOT NULL,
                 quantity REAL NOT NULL,
+                buy_date TEXT,
+                buy_price REAL,
+                buy_amount REAL,
                 sell_price REAL NOT NULL,
                 sell_amount REAL NOT NULL,
                 realized_profit_loss REAL,
@@ -83,6 +86,9 @@ def init_store() -> None:
                 created_at {now_default}
             )
         """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        _add_column(conn, T_HOLDING_SALES, "buy_date", "TEXT")
+        _add_column(conn, T_HOLDING_SALES, "buy_price", "REAL")
+        _add_column(conn, T_HOLDING_SALES, "buy_amount", "REAL")
         execute(conn, f"""
             CREATE TABLE IF NOT EXISTS {T_UI_SETTINGS} (
                 key TEXT PRIMARY KEY,
@@ -287,21 +293,25 @@ def sell_holding(
         raise ValueError("Sell quantity must be greater than 0 and not more than current quantity")
 
     buy_price = float(holding["buy_price"])
+    buy_amount = round(sell_qty * buy_price, 2)
     sell_amount = round(sell_qty * float(sell_price), 2)
-    realized = round((float(sell_price) - buy_price) * sell_qty, 2)
+    realized = round(sell_amount - buy_amount, 2)
     remaining_qty = round(held_qty - sell_qty, 6)
 
     with _connect() as conn:
         execute(conn, f"""
             INSERT INTO {T_HOLDING_SALES}
-                (holding_id, symbol, sell_date, quantity, sell_price,
-                 sell_amount, realized_profit_loss, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (holding_id, symbol, sell_date, quantity, buy_date, buy_price,
+                 buy_amount, sell_price, sell_amount, realized_profit_loss, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             item_id,
             holding["symbol"],
             sell_date,
             sell_qty,
+            holding["buy_date"],
+            buy_price,
+            buy_amount,
             sell_price,
             sell_amount,
             realized,
@@ -324,9 +334,72 @@ def sell_holding(
         "status": "sold",
         "symbol": holding["symbol"],
         "sold_quantity": sell_qty,
+        "buy_amount": buy_amount,
         "sell_amount": sell_amount,
         "realized_profit_loss": realized,
         "holding": enrich_holding(_row_to_dict(next_holding) or {}) if next_holding else None,
+    }
+
+
+def profit_loss_report(from_date: str, to_date: str) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+
+    with _connect() as conn:
+        sell_rows = execute(conn, f"""
+            SELECT
+                s.id,
+                s.holding_id,
+                s.symbol,
+                s.sell_date,
+                s.quantity,
+                COALESCE(NULLIF(s.buy_date, ''), h.buy_date) AS buy_date,
+                COALESCE(s.buy_price, h.buy_price) AS buy_price,
+                COALESCE(s.buy_amount, s.quantity * h.buy_price) AS buy_amount,
+                s.sell_price,
+                s.sell_amount,
+                s.realized_profit_loss
+            FROM {T_HOLDING_SALES} s
+            LEFT JOIN {T_HOLDINGS} h ON h.id = s.holding_id
+            WHERE s.sell_date >= ? AND s.sell_date <= ?
+            ORDER BY s.sell_date, s.symbol, s.id
+        """, (from_date, to_date)).fetchall()
+
+    for row in sell_rows:
+        item = dict(row)
+        buy_amount = item.get("buy_amount")
+        if buy_amount is None and item.get("sell_amount") is not None and item.get("realized_profit_loss") is not None:
+            buy_amount = round(float(item["sell_amount"]) - float(item["realized_profit_loss"]), 2)
+        buy_price = item.get("buy_price")
+        if buy_price is None and buy_amount is not None and float(item["quantity"] or 0):
+            buy_price = round(float(buy_amount) / float(item["quantity"]), 2)
+        rows.append({
+            "date": item["sell_date"],
+            "symbol": item["symbol"],
+            "quantity": item["quantity"],
+            "buy_date": item.get("buy_date"),
+            "buy_price": buy_price,
+            "buy_amount": buy_amount,
+            "sell_date": item["sell_date"],
+            "sell_price": item["sell_price"],
+            "sell_amount": item["sell_amount"],
+            "profit_loss": item["realized_profit_loss"],
+        })
+
+    rows.sort(key=lambda item: (item["date"] or "", item["symbol"]))
+    total_buy = round(sum(float(row["buy_amount"] or 0) for row in rows), 2)
+    total_sell = round(sum(float(row["sell_amount"] or 0) for row in rows), 2)
+    realized_pnl = round(sum(float(row["profit_loss"] or 0) for row in rows), 2)
+
+    return {
+        "from_date": from_date,
+        "to_date": to_date,
+        "rows": rows,
+        "summary": {
+            "total_buy_amount": total_buy,
+            "total_sell_amount": total_sell,
+            "profit_loss": realized_pnl,
+            "sell_count": len(rows),
+        },
     }
 
 

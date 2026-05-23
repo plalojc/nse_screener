@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi import Query
 from pydantic import BaseModel, Field
 
 from ..store import (
@@ -13,6 +14,7 @@ from ..store import (
     delete_watchlist,
     list_holdings,
     list_watchlist,
+    profit_loss_report,
     sell_holding,
     update_holding,
     update_watchlist,
@@ -84,6 +86,16 @@ def remove_all_watchlist() -> dict[str, Any]:
 @router.get("/holdings")
 def holdings() -> list[dict[str, Any]]:
     return list_holdings()
+
+
+@router.get("/profit-loss")
+def profit_loss(
+    from_date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    to_date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+) -> dict[str, Any]:
+    if from_date > to_date:
+        raise HTTPException(status_code=400, detail="From date must be before To date")
+    return profit_loss_report(from_date, to_date)
 
 
 @router.post("/holdings")
