@@ -117,6 +117,24 @@ the LLM queue as `NEWS` candidates after Stage2 breakouts and Stage1 setups.
 .\venv\Scripts\python.exe main.py schedule
 ```
 
+## UI Portal
+
+The `screener_ui` folder contains a FastAPI + React portal for running scans,
+scheduling daily scans, viewing/downloading HTML reports, managing a watchlist,
+and tracking bought shares with current P/L from cached Bhavcopy prices.
+
+```powershell
+.\venv\Scripts\pip.exe install -r screener_ui\backend\requirements.txt
+cd screener_ui
+.\start_backend.ps1
+```
+
+Open `http://127.0.0.1:8787` after building the frontend. For local frontend
+development, run `.\start_frontend.ps1` from `screener_ui`. Use
+`.\stop_backend.ps1`, `.\stop_frontend.ps1`, or `.\stop_all.ps1` to stop the UI
+services. Matching `.cmd` scripts are also available, for example
+`start_all.cmd` and `stop_all.cmd`.
+
 ## Flow
 
 1. Load NSE EQ instruments from NSE Bhavcopy.

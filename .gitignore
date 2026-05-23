@@ -13,6 +13,9 @@ build/
 venv/
 env/
 ENV/
+node_modules/
+screener_ui/.runtime/
+screener_ui/logs/
 
 # Environment / secrets  ← NEVER commit real keys
 .env

@@ -9,3 +9,5 @@ colorama
 python-dotenv
 google-genai
 openai
+fastapi
+uvicorn[standard]
