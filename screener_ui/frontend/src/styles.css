@@ -569,6 +569,47 @@ th {
   table-layout: fixed;
 }
 
+.plTable th:nth-child(1),
+.plTable td:nth-child(1) {
+  width: 42px;
+}
+
+.plTable th:nth-child(2),
+.plTable td:nth-child(2) {
+  width: 104px;
+}
+
+.plTable th:nth-child(3),
+.plTable td:nth-child(3) {
+  width: 70px;
+}
+
+.plTable th:nth-child(4),
+.plTable td:nth-child(4),
+.plTable th:nth-child(7),
+.plTable td:nth-child(7) {
+  width: 96px;
+}
+
+.plTable th:nth-child(5),
+.plTable td:nth-child(5),
+.plTable th:nth-child(8),
+.plTable td:nth-child(8) {
+  width: 88px;
+}
+
+.plTable th:nth-child(6),
+.plTable td:nth-child(6),
+.plTable th:nth-child(9),
+.plTable td:nth-child(9) {
+  width: 96px;
+}
+
+.plTable th:nth-child(10),
+.plTable td:nth-child(10) {
+  width: 150px;
+}
+
 .plTable td.buyCol {
   background: #eaf7ef;
   color: #111827;
@@ -599,15 +640,41 @@ th {
 }
 
 .plTable td.pnlCol {
+  white-space: nowrap;
+}
+
+.pnlCell {
   align-items: center;
   display: flex;
   gap: 8px;
   justify-content: space-between;
+  min-height: 24px;
+  width: 100%;
+}
+
+.pnlText {
+  align-items: baseline;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pnlAmount {
+  white-space: nowrap;
+}
+
+.pnlPct {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.82;
+  white-space: nowrap;
 }
 
 .plDeleteBtn {
   background: transparent;
   color: #9f2f23;
+  flex: 0 0 auto;
   min-height: 24px;
   opacity: 0;
   padding: 3px;

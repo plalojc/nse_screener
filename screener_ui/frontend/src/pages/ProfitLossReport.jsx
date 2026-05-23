@@ -21,6 +21,21 @@ function pnlClass(value) {
   return Number(value || 0) >= 0 ? "gain" : "loss";
 }
 
+function pnlPercent(profitLoss, buyAmount) {
+  const base = Number(buyAmount || 0);
+  if (!base) return null;
+  return (Number(profitLoss || 0) / base) * 100;
+}
+
+function pnlDisplay(profitLoss, buyAmount) {
+  if (profitLoss === null || profitLoss === undefined) return "-";
+  const pct = pnlPercent(profitLoss, buyAmount);
+  return {
+    amount: money(profitLoss),
+    percent: pct === null ? "" : `${pct.toFixed(1)}%`
+  };
+}
+
 export function ProfitLossReport() {
   const [fromDate, setFromDate] = useState(monthStartValue());
   const [toDate, setToDate] = useState(todayInputValue());
@@ -63,6 +78,7 @@ export function ProfitLossReport() {
 
   const rows = data?.rows || [];
   const summary = data?.summary || {};
+  const summaryPnl = pnlDisplay(summary.profit_loss, summary.total_buy_amount);
 
   return (
     <section>
@@ -107,31 +123,41 @@ export function ProfitLossReport() {
             </thead>
             <tbody>
               {rows.length ? rows.map((row, index) => (
-                <tr key={row.id || `${row.symbol}-${row.sell_date}-${index}`}>
-                  <td className="slCol">{index + 1}</td>
-                  <td><strong>{row.symbol}</strong></td>
-                  <td>{number(row.quantity)}</td>
-                  <td className="buyCol">{row.buy_date || "-"}</td>
-                  <td className="buyCol">{money(row.buy_price)}</td>
-                  <td className="buyCol">{money(row.buy_amount)}</td>
-                  <td className="sellCol">{row.sell_date || "-"}</td>
-                  <td className="sellCol">{money(row.sell_price)}</td>
-                  <td className="sellCol">{money(row.sell_amount)}</td>
-                  <td className={`pnlCol ${pnlClass(row.profit_loss)}`}>
-                    <span>{row.profit_loss === null || row.profit_loss === undefined ? "-" : money(row.profit_loss)}</span>
-                    {row.id && (
-                      <button
-                        className="plDeleteBtn"
-                        type="button"
-                        title={`Delete ${row.symbol} sale row`}
-                        aria-label={`Delete ${row.symbol} sale row`}
-                        onClick={() => setDeleteRow(row)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </td>
-                </tr>
+                (() => {
+                  const pnl = pnlDisplay(row.profit_loss, row.buy_amount);
+                  return (
+                    <tr key={row.id || `${row.symbol}-${row.sell_date}-${index}`}>
+                      <td className="slCol">{index + 1}</td>
+                      <td><strong>{row.symbol}</strong></td>
+                      <td>{number(row.quantity)}</td>
+                      <td className="buyCol">{row.buy_date || "-"}</td>
+                      <td className="buyCol">{money(row.buy_price)}</td>
+                      <td className="buyCol">{money(row.buy_amount)}</td>
+                      <td className="sellCol">{row.sell_date || "-"}</td>
+                      <td className="sellCol">{money(row.sell_price)}</td>
+                      <td className="sellCol">{money(row.sell_amount)}</td>
+                      <td className={`pnlCol ${pnlClass(row.profit_loss)}`}>
+                        <div className="pnlCell">
+                          <span className="pnlText">
+                            <span className="pnlAmount">{pnl.amount || pnl}</span>
+                            {pnl.percent && <span className="pnlPct">({pnl.percent})</span>}
+                          </span>
+                          {row.id && (
+                            <button
+                              className="plDeleteBtn"
+                              type="button"
+                              title={`Delete ${row.symbol} sale row`}
+                              aria-label={`Delete ${row.symbol} sale row`}
+                              onClick={() => setDeleteRow(row)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })()
               )) : (
                 <tr><td colSpan="10">{loading ? "Loading..." : "No sold shares in this date range."}</td></tr>
               )}
@@ -142,7 +168,14 @@ export function ProfitLossReport() {
                 <td><strong>{money(summary.total_buy_amount)}</strong></td>
                 <td colSpan="2" />
                 <td><strong>{money(summary.total_sell_amount)}</strong></td>
-                <td className={`pnlCol ${pnlClass(summary.profit_loss)}`}><strong>{money(summary.profit_loss)}</strong></td>
+                <td className={`pnlCol ${pnlClass(summary.profit_loss)}`}>
+                  <div className="pnlCell">
+                    <strong className="pnlText">
+                      <span className="pnlAmount">{summaryPnl.amount || summaryPnl}</span>
+                      {summaryPnl.percent && <span className="pnlPct">({summaryPnl.percent})</span>}
+                    </strong>
+                  </div>
+                </td>
               </tr>
             </tfoot>
           </table>
