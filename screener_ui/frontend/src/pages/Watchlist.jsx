@@ -161,7 +161,7 @@ export function Watchlist() {
           <input placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
           <button type="submit"><Plus size={16} />Add</button>
         </form>
-        <div className="tableWrap">
+        <div className="tableWrap watchlistWrap">
           <table className="watchlistTable">
             <thead>
               <tr>
@@ -217,8 +217,14 @@ export function Watchlist() {
                   <td>{item.created_at || "-"}</td>
                   <td>
                     <div className="rowActions">
-                      <button type="button" className="smallBtn actionBtn" onClick={() => startEdit(item)}>
-                        <Edit3 size={14} />Edit
+                      <button
+                        type="button"
+                        className="iconActionBtn actionBtn"
+                        onClick={() => startEdit(item)}
+                        title={`Edit ${item.symbol}`}
+                        aria-label={`Edit ${item.symbol}`}
+                      >
+                        <Edit3 size={15} />
                       </button>
                       <button className="iconDanger" type="button" onClick={() => remove(item.id)}>
                         <Trash2 size={16} />

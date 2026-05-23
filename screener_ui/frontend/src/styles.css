@@ -546,7 +546,13 @@ th {
 }
 
 .watchlistTable {
-  min-width: 1180px;
+  min-width: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.watchlistWrap {
+  overflow-x: hidden;
 }
 
 .holdingsTable {
@@ -610,6 +616,10 @@ th {
   white-space: normal;
 }
 
+.watchlistTable th {
+  white-space: normal;
+}
+
 .watchlistTable td,
 .holdingsTable td {
   border: 1px solid #d7dde5;
@@ -620,6 +630,42 @@ th {
 
 .holdingsTable td {
   overflow-wrap: anywhere;
+}
+
+.watchlistTable td {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.watchlistTable th:nth-child(1),
+.watchlistTable td:nth-child(1) {
+  width: 44px;
+}
+
+.watchlistTable th:nth-child(2),
+.watchlistTable td:nth-child(2) {
+  width: 132px;
+}
+
+.watchlistTable th:nth-child(3),
+.watchlistTable td:nth-child(3),
+.watchlistTable th:nth-child(4),
+.watchlistTable td:nth-child(4),
+.watchlistTable th:nth-child(5),
+.watchlistTable td:nth-child(5),
+.watchlistTable th:nth-child(6),
+.watchlistTable td:nth-child(6) {
+  width: 96px;
+}
+
+.watchlistTable th:nth-child(8),
+.watchlistTable td:nth-child(8) {
+  width: 128px;
+}
+
+.watchlistTable th:nth-child(9),
+.watchlistTable td:nth-child(9) {
+  width: 76px;
 }
 
 .watchlistTable tbody tr:nth-child(even),
@@ -678,8 +724,11 @@ tr:hover .hoverActionCell .slAddBtn {
   font-size: 12px;
   font-weight: 700;
   justify-content: flex-start;
+  max-width: 100%;
   min-height: 24px;
   padding: 0;
+  text-align: left;
+  white-space: normal;
 }
 
 .symbolLink:hover {
@@ -717,8 +766,17 @@ tr:hover .hoverActionCell .slAddBtn {
 .rowActions {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+}
+
+.watchlistTable .rowActions {
+  justify-content: center;
+}
+
+.watchlistTable .rowActions button {
+  flex: 0 0 auto;
+  width: auto;
 }
 
 .smallBtn {
@@ -732,6 +790,13 @@ tr:hover .hoverActionCell .slAddBtn {
 .actionBtn {
   background: #46566b;
   color: white;
+}
+
+.iconActionBtn {
+  border: 1px solid transparent;
+  min-height: 28px;
+  min-width: 32px;
+  padding: 4px 7px;
 }
 
 .sellBtn {
