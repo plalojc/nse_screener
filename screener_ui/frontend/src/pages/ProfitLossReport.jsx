@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, Trash2, X } from "lucide-react";
 import { api } from "../api.js";
 import { Metric } from "../components/Metric.jsx";
 import { Notice } from "../components/Notice.jsx";
@@ -25,6 +25,7 @@ export function ProfitLossReport() {
   const [fromDate, setFromDate] = useState(monthStartValue());
   const [toDate, setToDate] = useState(todayInputValue());
   const [data, setData] = useState(null);
+  const [deleteRow, setDeleteRow] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -44,6 +45,21 @@ export function ProfitLossReport() {
   useEffect(() => {
     loadReport();
   }, []);
+
+  async function confirmDelete() {
+    if (!deleteRow) return;
+    setLoading(true);
+    setError("");
+    try {
+      await api(`/api/profit-loss/${deleteRow.id}`, { method: "DELETE" });
+      setDeleteRow(null);
+      await loadReport();
+    } catch (err) {
+      setError(err.message || "Unable to delete P/L row");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const rows = data?.rows || [];
   const summary = data?.summary || {};
@@ -91,7 +107,7 @@ export function ProfitLossReport() {
             </thead>
             <tbody>
               {rows.length ? rows.map((row, index) => (
-                <tr key={`${row.symbol}-${row.sell_date}-${index}`}>
+                <tr key={row.id || `${row.symbol}-${row.sell_date}-${index}`}>
                   <td className="slCol">{index + 1}</td>
                   <td><strong>{row.symbol}</strong></td>
                   <td>{number(row.quantity)}</td>
@@ -102,7 +118,18 @@ export function ProfitLossReport() {
                   <td className="sellCol">{money(row.sell_price)}</td>
                   <td className="sellCol">{money(row.sell_amount)}</td>
                   <td className={`pnlCol ${pnlClass(row.profit_loss)}`}>
-                    {row.profit_loss === null || row.profit_loss === undefined ? "-" : money(row.profit_loss)}
+                    <span>{row.profit_loss === null || row.profit_loss === undefined ? "-" : money(row.profit_loss)}</span>
+                    {row.id && (
+                      <button
+                        className="plDeleteBtn"
+                        type="button"
+                        title={`Delete ${row.symbol} sale row`}
+                        aria-label={`Delete ${row.symbol} sale row`}
+                        onClick={() => setDeleteRow(row)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </td>
                 </tr>
               )) : (
@@ -121,6 +148,29 @@ export function ProfitLossReport() {
           </table>
         </div>
       </div>
+      {deleteRow && (
+        <div className="modalOverlay" onClick={() => setDeleteRow(null)}>
+          <div className="appModal confirmModal" onClick={(event) => event.stopPropagation()}>
+            <div className="modalHeader">
+              <div>
+                <h2>Delete P/L Row</h2>
+                <p>Delete the sold transaction for {deleteRow.symbol} on {deleteRow.sell_date}?</p>
+              </div>
+              <button type="button" className="modalClose" onClick={() => setDeleteRow(null)} title="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modalActions">
+              <button type="button" className="dangerBtn" onClick={confirmDelete} disabled={loading}>
+                <Trash2 size={16} />Delete
+              </button>
+              <button type="button" className="secondaryBtn" onClick={() => setDeleteRow(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -314,6 +314,10 @@ select:focus {
   background: #46566b;
 }
 
+.dangerBtn {
+  background: #b42318;
+}
+
 label {
   color: #58677a;
   display: grid;
@@ -592,6 +596,33 @@ th {
   background: #fff3f1;
   color: #9f2f23;
   font-weight: 700;
+}
+
+.plTable td.pnlCol {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.plDeleteBtn {
+  background: transparent;
+  color: #9f2f23;
+  min-height: 24px;
+  opacity: 0;
+  padding: 3px;
+  pointer-events: none;
+}
+
+.plTable tbody tr:hover .plDeleteBtn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.plDeleteBtn:hover,
+.dangerBtn:hover {
+  background: #9f1f15;
+  color: white;
 }
 
 .watchlistTable,

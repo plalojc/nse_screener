@@ -373,6 +373,7 @@ def profit_loss_report(from_date: str, to_date: str) -> dict[str, Any]:
         if buy_price is None and buy_amount is not None and float(item["quantity"] or 0):
             buy_price = round(float(buy_amount) / float(item["quantity"]), 2)
         rows.append({
+            "id": item["id"],
             "date": item["sell_date"],
             "symbol": item["symbol"],
             "quantity": item["quantity"],
@@ -401,6 +402,13 @@ def profit_loss_report(from_date: str, to_date: str) -> dict[str, Any]:
             "sell_count": len(rows),
         },
     }
+
+
+def delete_profit_loss_sale(sale_id: int) -> bool:
+    with _connect() as conn:
+        cursor = execute(conn, f"DELETE FROM {T_HOLDING_SALES} WHERE id=?", (sale_id,))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def set_setting(key: str, value: str) -> None:

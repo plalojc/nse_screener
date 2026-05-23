@@ -11,6 +11,7 @@ from ..store import (
     add_watchlist,
     clear_watchlist,
     delete_holding,
+    delete_profit_loss_sale,
     delete_watchlist,
     list_holdings,
     list_watchlist,
@@ -96,6 +97,14 @@ def profit_loss(
     if from_date > to_date:
         raise HTTPException(status_code=400, detail="From date must be before To date")
     return profit_loss_report(from_date, to_date)
+
+
+@router.delete("/profit-loss/{sale_id}")
+def remove_profit_loss_sale(sale_id: int) -> dict[str, str]:
+    deleted = delete_profit_loss_sale(sale_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="P/L row not found")
+    return {"status": "deleted"}
 
 
 @router.post("/holdings")
