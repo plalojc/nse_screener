@@ -15,21 +15,31 @@ from data.nse_bhavcopy_client import load_ohlcv_bulk as load_bhavcopy_ohlcv_bulk
 from data.nse_bhavcopy_client import update_bhavcopy_cache
 from analysis.breakout_scanner import (
     is_breakout,
+    is_llm_watchlist_candidate,
     is_ma_pullback,
+    is_stage1_watchlist,
     passes_breakout_prefilter,
+    passes_stage1_prefilter,
+)
+from analysis.catalyst_news import (
+    attach_best_catalyst,
+    build_news_signal,
+    fetch_and_store_catalysts,
+    get_catalyst_map,
 )
 from analysis.technical import add_indicators
-from analysis.news_fetcher     import fetch_and_store_news, get_news_for_symbol
 from analysis.gemini_validator import validate_signals_gemini_direct
 from analysis.grok_validator import validate_signals_grok_batch
 from agent.portfolio_tracker   import check_exit_signals
-from config import (LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
+from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
+                    ENABLE_CATALYST_NEWS,
                     SCAN_SIGNAL_TYPES,
                     MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, TOP_PICKS_COUNT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
                     TOP_PICKS_RSI_MAX, REPORT_DIR,
-                    GEMINI_VALIDATOR_MODEL, GROK_VALIDATOR_MODEL)
+                    GEMINI_VALIDATOR_MODEL, GROK_VALIDATOR_MODEL,
+                    MAX_CATALYST_CANDIDATES)
 from report.html_report_writer import write as write_html_report
 
 init(autoreset=True)
@@ -41,7 +51,27 @@ def _validator_name() -> str:
 
 def _rank_signal(sig: dict) -> tuple:
     """Built-in ranking before paid/remote LLM validation."""
-    stage_bonus = 2 if sig.get("stage") == "Stage2" else 0
+    signal_type = str(sig.get("signal_type") or "").upper()
+    stage = sig.get("stage")
+    if signal_type == "BREAKOUT" and stage == "Stage2":
+        priority = 50
+    elif signal_type == "STAGE1":
+        priority = 40
+    elif signal_type == "BREAKOUT":
+        priority = 35
+    elif signal_type == "NEWS":
+        priority = 32
+    elif signal_type == "PULLBACK":
+        priority = 30
+    elif signal_type == "WATCHLIST" and stage == "Stage2":
+        priority = 20
+    elif signal_type == "WATCHLIST" and stage == "Stage1":
+        priority = 15
+    else:
+        priority = 0
+    stage_bonus = 2 if stage == "Stage2" else 0
+    catalyst_score = sig.get("catalyst_score") or 0
+    catalyst_confidence = sig.get("catalyst_confidence") or 0
     pattern_score = sig.get("pattern_score") or 0
     score = sig.get("swing_score") or sig.get("score") or 0
     vol_ratio = sig.get("vol_ratio") or 0
@@ -51,7 +81,10 @@ def _rank_signal(sig: dict) -> tuple:
     extension = sig.get("ema20_extension_pct") or 99
     turnover = sig.get("turnover_cr") or 0
     return (
+        priority,
         score + stage_bonus,
+        catalyst_score,
+        catalyst_confidence,
         pattern_score,
         -risk,
         -extension,
@@ -124,8 +157,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     """
     Full daily scan:
     1. Check exit conditions on open positions
-    2. Fetch news
-    3. Screen the full NSE EQ universe (or a provided list) for breakouts
+    2. Screen the full NSE EQ universe (or a provided list) for breakouts
        - Uses NSE Bhavcopy cache; downloads missing Bhavcopy files as needed.
        - Pass force_refresh=True to refresh the latest Bhavcopy file.
     4. LLM validation of top rule-ranked signals only
@@ -140,6 +172,8 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     print(Fore.CYAN + "   Data      : NSE Bhavcopy")
     print(Fore.CYAN + f"   Signals   : {', '.join(sorted(SCAN_SIGNAL_TYPES)) or 'BREAKOUT'}")
     print(Fore.CYAN + f"   Validator : {_validator_name()}")
+    if LLM_FILL_TO_LIMIT and LLM_VALIDATION_LIMIT > 0:
+        print(Fore.CYAN + f"   LLM fill  : target top {LLM_VALIDATION_LIMIT} with NEWS/WATCHLIST fill")
     if force_refresh:
         print(Fore.YELLOW + "   Mode      : FORCE REFRESH (ignoring OHLCV cache)")
 
@@ -162,12 +196,6 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     else:
         print("  No exits triggered.")
 
-    # 
-    print(Fore.YELLOW + "\n[2/5] Fetching market news...")
-    n = fetch_and_store_news()
-    print(f"  {n} new articles cached.")
-
-    # 
     # Load blacklist once here - used to pre-filter the universe before the loop
     invalid_symbols = get_invalid_symbols()
 
@@ -188,6 +216,16 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         print(f"  Universe: {len(universe)} NSE EQ instruments "
               f"({raw_count - len(universe)} blacklisted removed).")
 
+    catalyst_map = {}
+    if ENABLE_CATALYST_NEWS:
+        print(Fore.YELLOW + "\n[2b] Fetching catalyst/news events...")
+        catalyst_rows = fetch_and_store_catalysts(target_date, universe)
+        catalyst_map = get_catalyst_map(target_date)
+        print(
+            f"  Catalyst events cached/updated: {catalyst_rows} "
+            f"| Symbols with catalysts: {len(catalyst_map)}"
+        )
+
     # == Step 3: Scan universe =============================================
     signals     = []
     open_pos    = {p["symbol"] for p in get_open_positions()}
@@ -200,16 +238,21 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     ohlcv_by_symbol = load_bhavcopy_ohlcv_bulk(scan_universe, upto_date=target_date)
     use_breakout = not SCAN_SIGNAL_TYPES or "BREAKOUT" in SCAN_SIGNAL_TYPES
     use_pullback = "PULLBACK" in SCAN_SIGNAL_TYPES
+    use_stage1 = "STAGE1" in SCAN_SIGNAL_TYPES
     scanners = []
     if use_breakout:
         scanners.append(is_breakout)
     if use_pullback:
         scanners.append(is_ma_pullback)
+    if use_stage1:
+        scanners.append(is_stage1_watchlist)
     if not scanners:
         print(Fore.YELLOW + "  [WARN] SCAN_SIGNAL_TYPES matched no known scanners; using BREAKOUT.")
         use_breakout = True
         scanners.append(is_breakout)
     prefiltered = 0
+    news_fill_candidates = []
+    watchlist_fill_candidates = []
 
     for i, symbol in enumerate(universe, 1):
         if symbol in open_pos:
@@ -225,21 +268,60 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             invalid_symbols.add(symbol)   # update in-memory set for this run too
             continue
 
-        if use_breakout and not use_pullback and not passes_breakout_prefilter(df):
+        should_prefilter = (
+            not LLM_FILL_TO_LIMIT
+            and not use_pullback
+            and (use_breakout or use_stage1)
+        )
+        if should_prefilter:
+            passes_any_prefilter = (
+                (use_breakout and passes_breakout_prefilter(df))
+                or (use_stage1 and passes_stage1_prefilter(df))
+            )
+        else:
+            passes_any_prefilter = True
+        if not passes_any_prefilter:
             prefiltered += 1
             continue
 
         df = add_indicators(df)
+        symbol_has_signal = False
         for scanner in scanners:
             sig = scanner(df)
             if sig:
                 sig["symbol"] = symbol
-                sig["news"]   = get_news_for_symbol(symbol)
+                if symbol in catalyst_map:
+                    sig = attach_best_catalyst(sig, catalyst_map[symbol])
                 signals.append(sig)
+                symbol_has_signal = True
+
+        if LLM_FILL_TO_LIMIT and LLM_VALIDATION_LIMIT > 0 and not symbol_has_signal:
+            sig = None
+            if symbol in catalyst_map:
+                sig = build_news_signal(symbol, df, catalyst_map[symbol])
+            if sig is None:
+                sig = is_llm_watchlist_candidate(df)
+            if sig:
+                sig["symbol"] = symbol
+                if sig.get("signal_type") == "WATCHLIST":
+                    watchlist_fill_candidates.append(sig)
+                elif sig.get("signal_type") == "NEWS":
+                    news_fill_candidates.append(sig)
+                else:
+                    signals.append(sig)
+
+    news_fill_candidates.sort(key=_rank_signal, reverse=True)
+    if MAX_CATALYST_CANDIDATES > 0:
+        news_fill_candidates = news_fill_candidates[:MAX_CATALYST_CANDIDATES]
+    watchlist_fill_candidates.sort(key=_rank_signal, reverse=True)
+    signals.extend(news_fill_candidates)
+    signals.extend(watchlist_fill_candidates)
 
     print(
         f"\n  Done. Loaded from cache: {len(ohlcv_by_symbol)} "
-        f"| Prefiltered: {prefiltered} | Skipped (open pos): {skipped}"
+        f"| Prefiltered: {prefiltered} | News fill: {len(news_fill_candidates)} "
+        f"| Watchlist fill: {len(watchlist_fill_candidates)} "
+        f"| Skipped (open pos): {skipped}"
     )
 
     signals.sort(key=_rank_signal, reverse=True)
@@ -281,7 +363,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             sig["scan_date"] = target_date
 
     # == Step 5: Display and auto-enter top signals ========================
-    print(Fore.YELLOW + f"\n[5/5] Results: {len(signals)} breakout candidate(s) found.")
+    print(Fore.YELLOW + f"\n[5/5] Results: {len(signals)} signal candidate(s) found.")
     if signals:
         # Sort: CONFIRM first, then WEAK, then REJECT/SKIPPED; within each group by score.
         _verdict_order = {"CONFIRM": 0, "WEAK": 1, "REJECT": 2, "SKIPPED": 3}
@@ -303,7 +385,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             + f"SKIPPED : {verdict_counts.get('SKIPPED', 0)}"
         )
         
-        print(Fore.CYAN + f"\n{'=='*20} BREAKOUT CANDIDATES {'=='*20}")
+        print(Fore.CYAN + f"\n{'=='*20} SIGNAL CANDIDATES {'=='*20}")
         rows = []
         for s in signals:
             verdict = s.get("llm_verdict", "")

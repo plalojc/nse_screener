@@ -18,8 +18,8 @@
 # and 4c (Claude live validation) are automatically skipped when
 # USE_GEMINI_VALIDATOR=true - they would be redundant.
 #
-# Toggle : USE_GEMINI_VALIDATOR=true in .env
-# API key: GEMINI_VALIDATOR_API_KEY  (falls back to GEMINI_SENTIMENT_API_KEY)
+# Select : LLM_VALIDATOR=gemini in .env
+# API key: GEMINI_VALIDATOR_API_KEY
 # Model  : GEMINI_VALIDATOR_MODEL    (default: gemini-2.5-flash)
 # Rate   : GEMINI_VALIDATOR_RATE_DELAY seconds between calls
 #          Free tier : 10 RPM  -> set delay to 6.0
@@ -90,20 +90,14 @@ def _build_prompt(sig: dict) -> str:
         if macd is not None else "N/A"
     )
 
-    # Include RSS news headlines already fetched by the screener
-    raw_news = sig.get("news") or []
-    news_lines = "\n".join(
-        f"  - {item['title'] if isinstance(item, dict) else str(item)}"
-        for item in raw_news[:5]
-    ) or "  None cached from RSS feeds."
-
+    signal_type = sig.get("signal_type", "BREAKOUT")
     return f"""
-You are a senior NSE India equity analyst. Validate the breakout signal below.
+You are a senior NSE India equity analyst. Validate the technical signal below.
 Use Google Search to find LIVE news and events for {sig.get('symbol')} NSE India.
 
 === TECHNICAL SIGNAL (rule-based scanner) ====================
 Symbol      : {sig.get('symbol')}  |  Date: {sig.get('scan_date', 'today')}
-Signal      : {sig.get('signal_type', 'BREAKOUT')}  |  Stage: {sig.get('stage')}
+Signal      : {signal_type}  |  Stage: {sig.get('stage')}
 Score       : {sig.get('score', 0)}  (min to pass: 6; strong setup: >=10)
 Close Price : Rs.{close}
 
@@ -130,10 +124,17 @@ TRADE SETUP
   Target     : Rs.{tp}  ({tp_pct}% above, 2:1 R:R)
 
 Scanner reasons: {sig.get('reasons', 'N/A')}
+Catalyst    : {sig.get('catalyst_summary') or 'N/A'}
+Catalyst src: {sig.get('catalyst_source') or 'N/A'} / {sig.get('catalyst_category') or 'N/A'}
+Catalyst map: {sig.get('catalyst_theme') or 'N/A'} / {sig.get('catalyst_mapping_source') or 'N/A'} / confidence {sig.get('catalyst_confidence') or 'N/A'}
 
-CACHED RSS NEWS HEADLINES (pre-fetched, may be 1-2 days old):
-{news_lines}
-==============================================================
+Note: STAGE1 means a pre-breakout/watchlist setup, not a confirmed breakout.
+WATCHLIST means a lower-priority fill candidate sent only after stronger setups.
+NEWS means a catalyst-driven candidate from corporate announcements or policy news.
+For STAGE1/WATCHLIST/NEWS, evaluate base quality, compression, near-breakout
+positioning, improving volume, and whether news/catalyst supports monitoring it.
+Policy/theme mappings are candidate generation hints; verify that the company is
+a reasonable beneficiary before confirming.
 
 SEARCH TASK - search for "{sig.get('symbol')} NSE India stock news site:economictimes.com OR site:moneycontrol.com OR site:business-standard.com OR site:nseindia.com"
 Also search: "{sig.get('symbol')} NSE earnings results order SEBI 2026"
@@ -166,6 +167,12 @@ VERDICT RULES:
   CONFIRM - SwingScore >= 12, vol >= 1.8x, RSI 55-75, Stage2, manageable entry risk,
             not overextended above EMA20, AND no major negative news.
             Prefer fresh 55-day highs for 2-4 week follow-through.
+            For STAGE1 only, CONFIRM means strong watchlist candidate with
+            constructive base/volume/catalyst, not immediate breakout confirmation.
+            For WATCHLIST, use CONFIRM only when news/catalyst plus technicals
+            are unusually strong; otherwise prefer WEAK.
+            For NEWS, confirm only if the catalyst is current, material, and
+            not outweighed by weak technicals or negative context.
   WEAK    - Score 6-9, OR vol < 1.8x, OR RSI borderline (>75), OR no catalyst found,
             OR mixed/conflicting news. Setup exists but lacks full conviction.
   REJECT  - Negative news found (SEBI probe, earnings miss, fraud, rating downgrade,

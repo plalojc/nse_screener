@@ -8,7 +8,10 @@ from config import (VOLUME_SURGE_FACTOR, RSI_BREAKOUT_MIN,
                     RSI_OVERBOUGHT, MIN_PRICE, MAX_PRICE, ATR_SL_MULTIPLIER,
                     MIN_TURNOVER_CR, MIN_BREAKOUT_SCORE,
                     MAX_EMA20_EXTENSION_PCT, MAX_DAY_RANGE_ATR,
-                    MIN_CLOSE_RANGE_POS)
+                    MIN_CLOSE_RANGE_POS, MIN_STAGE1_SCORE,
+                    STAGE1_NEAR_BREAKOUT_PCT, STAGE1_RSI_MIN,
+                    STAGE1_RSI_MAX, MIN_WATCHLIST_SCORE,
+                    MIN_WATCHLIST_TURNOVER_CR, WATCHLIST_NEAR_HIGH_PCT)
 
 
 def find_swing_low(df: pd.DataFrame, lookback: int = 20) -> float | None:
@@ -70,6 +73,49 @@ def passes_breakout_prefilter(df: pd.DataFrame) -> bool:
         (not pd.isna(high_55d) and close > high_55d)
         or (not pd.isna(high_20d) and close > high_20d)
     )
+
+
+def passes_stage1_prefilter(df: pd.DataFrame) -> bool:
+    """
+    Cheap gate for Stage1 watchlist candidates.
+
+    A Stage1 candidate is not a breakout yet. It should be liquid enough,
+    close strongly, and sit close to a 20d/55d trigger so Grok reviews names
+    that may be preparing for a move rather than every quiet stock.
+    """
+    if len(df) < 60:
+        return False
+
+    last = df.iloc[-1]
+    close = pd.to_numeric(last.get("close"), errors="coerce")
+    high = pd.to_numeric(last.get("high"), errors="coerce")
+    low = pd.to_numeric(last.get("low"), errors="coerce")
+    volume = pd.to_numeric(last.get("volume"), errors="coerce")
+    if any(pd.isna(v) for v in (close, high, low, volume)):
+        return False
+    if not (MIN_PRICE <= close <= MAX_PRICE):
+        return False
+
+    turnover_cr = (close * volume) / 10_000_000
+    if turnover_cr < MIN_TURNOVER_CR:
+        return False
+
+    day_range = high - low
+    if day_range <= 0:
+        return False
+    close_range_pos = (close - low) / day_range
+    if close_range_pos < MIN_CLOSE_RANGE_POS:
+        return False
+
+    prior_high = pd.to_numeric(df["high"].shift(1), errors="coerce")
+    high_20d = prior_high.rolling(20).max().iloc[-1]
+    high_55d = prior_high.rolling(55).max().iloc[-1]
+    usable_highs = [h for h in (high_20d, high_55d) if not pd.isna(h) and h > 0]
+    if not usable_highs:
+        return False
+    nearest_high = min(usable_highs)
+    distance_pct = (nearest_high - close) / nearest_high * 100
+    return 0 <= distance_pct <= STAGE1_NEAR_BREAKOUT_PCT
 
 
 # == Breakout Scanner ==========================================================
@@ -270,6 +316,301 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
         "close_range_pos": round(float(close_range_pos), 2),
         "day_range_atr": round(float(day_range_atr), 2),
         "breakout_lookback": breakout_lookback,
+    }
+
+
+def is_stage1_watchlist(df: pd.DataFrame) -> dict | None:
+    """
+    Stage1 pre-breakout watchlist signal.
+
+    This is intentionally separate from BREAKOUT. It lets the LLM review
+    accumulation/near-breakout stocks without diluting the stricter breakout
+    signal rules.
+    """
+    if len(df) < 60:
+        return None
+
+    df = add_indicators(df)
+    last = df.iloc[-1]
+    close = last["close"]
+    stage = get_stage(df)
+
+    if stage != "Stage1":
+        return None
+    if not (MIN_PRICE <= close <= MAX_PRICE):
+        return None
+
+    required = [
+        "ema20", "ema50", "rsi", "vol_ratio", "atr14", "high_20d",
+        "high_55d", "high_52w", "turnover_cr", "close_range_pos",
+        "day_range_atr", "bb_width",
+    ]
+    if any(pd.isna(last.get(col)) for col in required):
+        return None
+
+    rsi = float(last["rsi"])
+    vol_ratio = float(last["vol_ratio"])
+    atr14 = float(last["atr14"])
+    turnover_cr = float(last["turnover_cr"])
+    close_range_pos = float(last["close_range_pos"])
+    day_range_atr = float(last["day_range_atr"])
+    bb_width = float(last.get("bb_width") or 0)
+    ema20 = float(last["ema20"])
+    ema50 = float(last["ema50"])
+    ema200 = last.get("ema200")
+    high_20d = float(last["high_20d"])
+    high_55d = float(last["high_55d"])
+    high_52w = last.get("high_52w")
+
+    if turnover_cr < MIN_TURNOVER_CR:
+        return None
+    if close_range_pos < MIN_CLOSE_RANGE_POS:
+        return None
+    if day_range_atr > MAX_DAY_RANGE_ATR:
+        return None
+    if not (STAGE1_RSI_MIN <= rsi <= STAGE1_RSI_MAX):
+        return None
+    if close > high_20d or close > high_55d:
+        return None
+
+    trigger_high = min(high_20d, high_55d)
+    near_breakout_pct = (trigger_high - close) / trigger_high * 100
+    if near_breakout_pct < 0 or near_breakout_pct > STAGE1_NEAR_BREAKOUT_PCT:
+        return None
+
+    reasons = []
+    score = 0
+
+    if near_breakout_pct <= 2:
+        score += 3
+        reasons.append(f"Within {near_breakout_pct:.1f}% of breakout trigger")
+    else:
+        score += 2
+        reasons.append(f"Near breakout trigger ({near_breakout_pct:.1f}% away)")
+
+    if STAGE1_RSI_MIN <= rsi <= STAGE1_RSI_MAX:
+        score += 2
+        reasons.append(f"RSI={rsi:.1f} constructive for Stage1")
+    if vol_ratio >= 1.5:
+        score += 2
+        reasons.append(f"Accumulation volume {vol_ratio:.1f}x")
+    elif vol_ratio >= 1.1:
+        score += 1
+        reasons.append(f"Volume improving {vol_ratio:.1f}x")
+
+    ema_spread_pct = abs(ema20 - ema50) / ema50 * 100 if ema50 else 99
+    if ema_spread_pct <= 3:
+        score += 2
+        reasons.append("EMA20/50 compression")
+    elif ema_spread_pct <= 6:
+        score += 1
+        reasons.append("Moderate EMA20/50 compression")
+
+    if bb_width <= 8:
+        score += 2
+        reasons.append("Tight Bollinger compression")
+    elif bb_width <= 12:
+        score += 1
+        reasons.append("Moderate Bollinger compression")
+
+    if ema200 is not None and not pd.isna(ema200) and close > ema200:
+        score += 2
+        reasons.append("Above EMA200 base")
+    if close_range_pos >= 0.7:
+        score += 1
+        reasons.append("Strong close inside base")
+
+    swing_low = find_swing_low(df)
+    sl = _sl_from_atr_and_swing(close, atr14, swing_low)
+    entry_risk_pct = (close - sl) / close * 100 if close > sl else 99
+    if entry_risk_pct <= 8:
+        score += 1
+        reasons.append(f"Watchlist risk {entry_risk_pct:.1f}%")
+
+    if score < MIN_STAGE1_SCORE:
+        return None
+
+    return {
+        "signal_type": "STAGE1",
+        "symbol": df["symbol"].iloc[0] if "symbol" in df.columns else "?",
+        "close": round(float(close), 2),
+        "rsi": round(rsi, 1),
+        "vol_ratio": round(vol_ratio, 2),
+        "score": score,
+        "swing_score": score,
+        "stage": stage,
+        "reasons": "; ".join(reasons),
+        "ema20": round(ema20, 2),
+        "ema50": round(ema50, 2),
+        "ema200": round(float(ema200), 2) if ema200 is not None and not pd.isna(ema200) else None,
+        "macd_hist": round(float(last.get("macd_hist")), 4)
+                     if last.get("macd_hist") is not None and not pd.isna(last.get("macd_hist")) else None,
+        "supertrend_dir": int(last.get("supertrend_dir"))
+                          if last.get("supertrend_dir") is not None and not pd.isna(last.get("supertrend_dir")) else None,
+        "atr14": round(atr14, 2),
+        "swing_low": round(swing_low, 2) if swing_low is not None else None,
+        "high_52w": round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
+        "turnover_cr": round(turnover_cr, 2),
+        "entry_risk_pct": round(entry_risk_pct, 2),
+        "ema20_extension_pct": round((close - ema20) / ema20 * 100, 2) if ema20 else None,
+        "ema50_extension_pct": round((close - ema50) / ema50 * 100, 2) if ema50 else None,
+        "close_range_pos": round(close_range_pos, 2),
+        "day_range_atr": round(day_range_atr, 2),
+        "breakout_lookback": "near",
+    }
+
+
+def is_llm_watchlist_candidate(df: pd.DataFrame) -> dict | None:
+    """
+    Lower-priority candidate used only to fill the LLM review queue.
+
+    These are not trade signals. They are ranked "interesting enough" stocks
+    that Grok/Gemini can review after stronger BREAKOUT/STAGE1/PULLBACK setups.
+    """
+    if len(df) < 60:
+        return None
+
+    df = add_indicators(df)
+    last = df.iloc[-1]
+    close = last["close"]
+    stage = get_stage(df)
+
+    if stage == "Stage3":
+        return None
+    if not (MIN_PRICE <= close <= MAX_PRICE):
+        return None
+
+    required = [
+        "ema20", "ema50", "rsi", "vol_ratio", "atr14", "high_20d",
+        "high_55d", "high_52w", "turnover_cr", "close_range_pos",
+        "day_range_atr", "ema20_extension_pct",
+    ]
+    if any(pd.isna(last.get(col)) for col in required):
+        return None
+
+    rsi = float(last["rsi"])
+    vol_ratio = float(last["vol_ratio"])
+    atr14 = float(last["atr14"])
+    turnover_cr = float(last["turnover_cr"])
+    close_range_pos = float(last["close_range_pos"])
+    day_range_atr = float(last["day_range_atr"])
+    ema20 = float(last["ema20"])
+    ema50 = float(last["ema50"])
+    ema200 = last.get("ema200")
+    high_20d = float(last["high_20d"])
+    high_55d = float(last["high_55d"])
+    high_52w = last.get("high_52w")
+    ema20_extension_pct = float(last["ema20_extension_pct"])
+
+    if turnover_cr < MIN_WATCHLIST_TURNOVER_CR:
+        return None
+    if day_range_atr > MAX_DAY_RANGE_ATR * 1.25:
+        return None
+    if close_range_pos < 0.45:
+        return None
+    if ema20_extension_pct > MAX_EMA20_EXTENSION_PCT * 1.25:
+        return None
+
+    usable_highs = [h for h in (high_20d, high_55d) if h > 0]
+    if not usable_highs:
+        return None
+    trigger_high = min(usable_highs)
+    trigger_distance_pct = (trigger_high - close) / trigger_high * 100
+    if trigger_distance_pct > WATCHLIST_NEAR_HIGH_PCT:
+        return None
+
+    reasons = []
+    score = 0
+
+    if stage == "Stage2":
+        score += 3
+        reasons.append("Stage2 watchlist trend")
+    elif stage == "Stage1":
+        score += 2
+        reasons.append("Stage1 watchlist base")
+
+    if close >= high_55d:
+        score += 3
+        reasons.append("At/above 55d trigger but missed strict filters")
+    elif close >= high_20d:
+        score += 2
+        reasons.append("At/above 20d trigger but missed strict filters")
+    elif trigger_distance_pct <= 5:
+        score += 2
+        reasons.append(f"Within {trigger_distance_pct:.1f}% of trigger")
+    else:
+        score += 1
+        reasons.append(f"Near trigger ({trigger_distance_pct:.1f}% away)")
+
+    if 50 <= rsi <= 70:
+        score += 2
+        reasons.append(f"Constructive RSI={rsi:.1f}")
+    elif 45 <= rsi <= 75:
+        score += 1
+        reasons.append(f"Acceptable RSI={rsi:.1f}")
+
+    if vol_ratio >= 1.5:
+        score += 2
+        reasons.append(f"Volume improving {vol_ratio:.1f}x")
+    elif vol_ratio >= 1.1:
+        score += 1
+        reasons.append(f"Some volume support {vol_ratio:.1f}x")
+
+    if close > ema20:
+        score += 1
+        reasons.append("Above EMA20")
+    if close > ema50:
+        score += 1
+        reasons.append("Above EMA50")
+    if ema200 is not None and not pd.isna(ema200) and close > ema200:
+        score += 1
+        reasons.append("Above EMA200")
+    if high_52w is not None and not pd.isna(high_52w) and high_52w > 0:
+        near_52w_pct = (high_52w - close) / high_52w * 100
+        if near_52w_pct <= 15:
+            score += 2
+            reasons.append(f"Within {near_52w_pct:.1f}% of 52W high")
+        elif near_52w_pct <= 30:
+            score += 1
+            reasons.append(f"Within {near_52w_pct:.1f}% of 52W high")
+
+    swing_low = find_swing_low(df)
+    sl = _sl_from_atr_and_swing(close, atr14, swing_low)
+    entry_risk_pct = (close - sl) / close * 100 if close > sl else 99
+    if entry_risk_pct <= 8:
+        score += 1
+        reasons.append(f"Risk {entry_risk_pct:.1f}%")
+
+    if score < MIN_WATCHLIST_SCORE:
+        return None
+
+    return {
+        "signal_type": "WATCHLIST",
+        "symbol": df["symbol"].iloc[0] if "symbol" in df.columns else "?",
+        "close": round(float(close), 2),
+        "rsi": round(rsi, 1),
+        "vol_ratio": round(vol_ratio, 2),
+        "score": score,
+        "swing_score": score,
+        "stage": stage,
+        "reasons": "; ".join(reasons),
+        "ema20": round(ema20, 2),
+        "ema50": round(ema50, 2),
+        "ema200": round(float(ema200), 2) if ema200 is not None and not pd.isna(ema200) else None,
+        "macd_hist": round(float(last.get("macd_hist")), 4)
+                     if last.get("macd_hist") is not None and not pd.isna(last.get("macd_hist")) else None,
+        "supertrend_dir": int(last.get("supertrend_dir"))
+                          if last.get("supertrend_dir") is not None and not pd.isna(last.get("supertrend_dir")) else None,
+        "atr14": round(atr14, 2),
+        "swing_low": round(swing_low, 2) if swing_low is not None else None,
+        "high_52w": round(float(high_52w), 2) if high_52w is not None and not pd.isna(high_52w) else None,
+        "turnover_cr": round(turnover_cr, 2),
+        "entry_risk_pct": round(entry_risk_pct, 2),
+        "ema20_extension_pct": round(ema20_extension_pct, 2),
+        "ema50_extension_pct": round((close - ema50) / ema50 * 100, 2) if ema50 else None,
+        "close_range_pos": round(close_range_pos, 2),
+        "day_range_atr": round(day_range_atr, 2),
+        "breakout_lookback": "watch",
     }
 
 

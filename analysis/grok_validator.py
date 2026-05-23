@@ -74,6 +74,15 @@ def _build_payload(batch: list[dict]) -> list[dict]:
                 "vcp": bool(sig.get("vcp_detected")),
                 "bull_flag": bool(sig.get("bull_flag_detected")),
             },
+            "catalyst": {
+                "category": sig.get("catalyst_category"),
+                "summary": sig.get("catalyst_summary"),
+                "source": sig.get("catalyst_source"),
+                "theme": sig.get("catalyst_theme"),
+                "mapping_source": sig.get("catalyst_mapping_source"),
+                "score": sig.get("catalyst_score"),
+                "confidence": sig.get("catalyst_confidence"),
+            },
             "scanner_reasons": sig.get("reasons", "")[:220],
         })
     return payload
@@ -91,6 +100,15 @@ INPUT DATA:
 For EACH stock, evaluate these dimensions:
 1. Technical quality:
    - Stage2 is preferred; reject/penalize Stage3 parabolic moves.
+   - STAGE1 signals are pre-breakout/watchlist setups, not confirmed breakouts.
+     For STAGE1, look for base quality, compression, near-breakout positioning,
+     improving volume, and a real catalyst before giving CONFIRM.
+   - WATCHLIST signals are lower-priority fill candidates. Treat CONFIRM as
+     "worth monitoring closely", not as a ready trade.
+   - NEWS signals are catalyst-driven candidates. Validate whether the stated
+     catalyst is real, timely, material, and positive enough to justify review.
+     Policy/theme mappings are candidate generation hints; verify that the
+     company is a reasonable beneficiary before confirming.
    - Prior 55-day breakouts are preferred over weaker 20-day breakouts for a 2-4 week swing.
    - Healthy RSI is usually 55-75. RSI above 80 is overextended.
    - Volume confirmation is strong above 1.8x and weak below 1.5x.
@@ -137,6 +155,9 @@ Rules:
 - CONFIRM: valid equity, strong technical setup, no major red flags, and either a clear catalyst or exceptional price/volume confirmation.
 - WEAK: valid setup but missing catalyst, mixed/uncertain news, borderline RSI/volume/stage, uncertain liquidity, or stretched entry.
 - REJECT: invalid/non-equity instrument, serious negative news, poor liquidity, parabolic/overextended move, weak technicals, or misleading volume spike.
+- For STAGE1, CONFIRM means "strong watchlist candidate", not immediate breakout confirmation.
+- For WATCHLIST, be stricter: use CONFIRM only when news/catalyst plus technicals are unusually strong.
+- For NEWS, mention the catalyst category in reasoning and reject stale/immaterial/negative items.
 - If no reliable current news is found, set catalyst=null and judge mostly from technicals.
 - If uncertain, prefer WEAK over CONFIRM.
 """.strip()

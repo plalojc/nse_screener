@@ -24,7 +24,8 @@ nse_breakout_agent/
 |   |-- technical.py
 |   |-- breakout_scanner.py
 |   |-- pattern_scanner.py
-|   |-- news_fetcher.py
+|   |-- catalyst_news.py
+|   |-- theme_mapper.py
 |   |-- gemini_validator.py
 |   |-- grok_validator.py
 |   |-- backtester.py
@@ -47,24 +48,16 @@ copy env.example .env
 Edit `.env` and set:
 
 ```env
-NSE_BHAVCOPY_DB_PATH=nse_bhavcopy.db
-NSE_BHAVCOPY_DIR=data/bhavcopy
-GEMINI_VALIDATOR_API_KEY=...
-```
-
-Choose the validator:
-
-```env
 LLM_VALIDATOR=gemini
+GEMINI_VALIDATOR_API_KEY=...
+LLM_VALIDATION_LIMIT=100
 ```
 
-or:
+For Grok:
 
 ```env
 LLM_VALIDATOR=grok
 XAI_API_KEY=...
-GROK_VALIDATOR_MODEL=grok-4.20-reasoning
-GROK_VALIDATOR_BATCH_SIZE=10
 LLM_VALIDATION_LIMIT=100
 ```
 
@@ -77,13 +70,9 @@ Run a scan:
 .\venv\Scripts\python.exe main.py scan
 ```
 
-The scanner defaults to breakout-only mode for speed and focus:
-
-```env
-SCAN_SIGNAL_TYPES=BREAKOUT
-```
-
-Set `SCAN_SIGNAL_TYPES=BREAKOUT,PULLBACK` if you want the older pullback scan included too.
+The scanner now uses the product defaults directly: Stage2 breakouts, Stage1
+pre-breakout setups, pullbacks, and news-driven fill candidates are ranked
+locally, then only the best `LLM_VALIDATION_LIMIT` names are sent to the LLM.
 
 ## NSE Bhavcopy Data
 
@@ -97,16 +86,25 @@ The scanner downloads missing weekday Bhavcopy files with `jugaad-data`, filters
 
 ## Report Filters
 
-HTML reports show recommended breakout stocks by default:
+HTML reports show confirmed/recommended stocks by default:
 
 ```env
-REPORT_SIGNAL_TYPES=BREAKOUT
 REPORT_INCLUDE_WEAK=false
-REPORT_INCLUDE_REJECTED=false
-REPORT_INCLUDE_SKIPPED=false
 ```
 
 Set `REPORT_INCLUDE_WEAK=true` if you want borderline LLM verdicts in the report.
+
+## Catalyst News
+
+The scanner automatically caches catalyst events before LLM validation. It looks
+for NSE corporate announcements such as results, order wins, block/bulk
+deals, approvals, expansion, and capital actions. It also scans PIB policy RSS
+for sector motivation, maps policy themes through `analysis/theme_mapper.py`,
+and optionally enriches those maps from NSE index constituent CSVs when they are
+available. Source failures are isolated: if NSE, PIB, or an index CSV is down,
+the scan continues with cached/local data. Catalyst events are saved in
+`catalyst_events`; direct company catalysts and policy-theme candidates can fill
+the LLM queue as `NEWS` candidates after Stage2 breakouts and Stage1 setups.
 
 ## Commands
 
@@ -125,9 +123,13 @@ Set `REPORT_INCLUDE_WEAK=true` if you want borderline LLM verdicts in the report
 2. Filter invalid instruments and ETFs.
 3. Bulk-load OHLCV from the SQLite Bhavcopy cache.
 4. Cheaply prefilter raw candles before calculating heavier technical indicators.
-5. Detect configured setups, breakout-only by default.
+5. Detect the built-in setup mix.
    - Breakouts must clear a prior 20/55-day high.
    - Local filters prefer Stage2 trend, healthy volume, liquidity, strong close, and manageable stop distance.
+   - Stage1 watchlist names must be liquid, close strongly, sit near a 20/55-day trigger, and show constructive RSI/compression.
+   - Optional Watchlist fill names are lower-priority candidates used only to fill the LLM review queue.
+   - News-driven names come from cached catalyst events such as results, deals, order wins, approvals, or government policy themes.
+   - Technical signals with a direct or mapped catalyst are boosted within their own priority bucket before LLM selection.
 6. Rank signals locally and validate only the top `LLM_VALIDATION_LIMIT` stocks with the configured LLM validator.
    - Gemini validates per signal with Google Search grounding.
    - Grok validates compact batches through xAI's OpenAI-compatible API.

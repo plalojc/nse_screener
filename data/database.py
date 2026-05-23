@@ -54,17 +54,6 @@ def init_db():
         pass  # column already exists
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS news_cache (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            title       TEXT,
-            url         TEXT UNIQUE,
-            published   TEXT,
-            source      TEXT,
-            fetched_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    cur.execute("""
         CREATE TABLE IF NOT EXISTS breakout_log (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_date       TEXT    NOT NULL,
@@ -136,11 +125,38 @@ def init_db():
           AND llm_verdict NOT IN ('', 'SKIPPED')
     """)
 
-    # Migrate news_cache: add body column for richer sentiment analysis
-    try:
-        cur.execute("ALTER TABLE news_cache ADD COLUMN body TEXT")
-    except sqlite3.OperationalError:
-        pass
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS catalyst_events (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_date     TEXT NOT NULL,
+            symbol         TEXT NOT NULL,
+            source         TEXT NOT NULL,
+            category       TEXT NOT NULL,
+            title          TEXT NOT NULL,
+            summary        TEXT,
+            url            TEXT,
+            score          INTEGER DEFAULT 0,
+            confidence     INTEGER DEFAULT 0,
+            theme          TEXT,
+            mapping_source TEXT,
+            raw_payload    TEXT,
+            fetched_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(event_date, symbol, source, title)
+        )
+    """)
+    for col, typedef in [
+        ("confidence",     "INTEGER DEFAULT 0"),
+        ("theme",          "TEXT"),
+        ("mapping_source", "TEXT"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE catalyst_events ADD COLUMN {col} {typedef}")
+        except sqlite3.OperationalError:
+            pass
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_catalyst_symbol_date
+        ON catalyst_events(symbol, event_date)
+    """)
 
     # == invalid_instruments: persistent blacklist of ETFs and no-data symbols
     cur.execute("""
@@ -376,6 +392,61 @@ def save_breakout_log(scan_date: str, sig: dict):
         ))
     conn.commit()
     conn.close()
+
+
+# == Catalyst Events =======================================================
+
+def save_catalyst_events(events: list[dict]) -> int:
+    """Insert/update catalyst events and return number of newly inserted rows."""
+    if not events:
+        return 0
+    normalised = []
+    for event in events:
+        row = dict(event)
+        row.setdefault("confidence", 0)
+        row.setdefault("theme", None)
+        row.setdefault("mapping_source", None)
+        normalised.append(row)
+    conn = get_conn()
+    before = conn.total_changes
+    conn.executemany("""
+        INSERT INTO catalyst_events
+            (event_date, symbol, source, category, title, summary, url,
+             score, confidence, theme, mapping_source, raw_payload)
+        VALUES
+            (:event_date, :symbol, :source, :category, :title, :summary, :url,
+             :score, :confidence, :theme, :mapping_source, :raw_payload)
+        ON CONFLICT(event_date, symbol, source, title) DO UPDATE SET
+            category=excluded.category,
+            summary=excluded.summary,
+            url=excluded.url,
+            score=excluded.score,
+            confidence=excluded.confidence,
+            theme=excluded.theme,
+            mapping_source=excluded.mapping_source,
+            raw_payload=excluded.raw_payload,
+            fetched_at=datetime('now')
+    """, normalised)
+    conn.commit()
+    inserted_or_updated = conn.total_changes - before
+    conn.close()
+    return inserted_or_updated
+
+
+def get_catalyst_events(upto_date: str, lookback_days: int = 7, min_score: int = 0) -> list[dict]:
+    """Return recent catalyst events up to upto_date."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT event_date, symbol, source, category, title, summary, url,
+               score, confidence, theme, mapping_source
+        FROM catalyst_events
+        WHERE event_date >= date(?, ?)
+          AND event_date <= ?
+          AND score >= ?
+        ORDER BY score DESC, event_date DESC
+    """, (upto_date, f"-{lookback_days} days", upto_date, min_score)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 # == Invalid Instruments Blacklist =========================================
 
