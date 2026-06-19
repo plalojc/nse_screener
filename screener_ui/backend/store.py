@@ -15,6 +15,7 @@ from data.db_backend import (
     user_schema,
 )
 
+from .auth import default_user_email
 from .settings import BHAVCOPY_DB_PATH, UI_DB_PATH
 
 
@@ -42,23 +43,30 @@ def init_store() -> None:
         ensure_schemas(conn)
         id_type = _id_type()
         now_default = _now_default()
+        default_owner = default_user_email()
         execute(conn, f"""
             CREATE TABLE IF NOT EXISTS {T_WATCHLIST} (
                 id INTEGER PRIMARY KEY,
-                symbol TEXT NOT NULL UNIQUE,
+                user_email TEXT NOT NULL DEFAULT '',
+                symbol TEXT NOT NULL,
                 notes TEXT,
                 target_price REAL,
                 added_price REAL,
                 added_price_date TEXT,
                 created_at {now_default},
-                updated_at {now_default}
+                updated_at {now_default},
+                UNIQUE(user_email, symbol)
             )
         """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        _migrate_watchlist_user_scope(conn, default_owner)
+        _add_column(conn, T_WATCHLIST, "user_email", "TEXT")
         _add_column(conn, T_WATCHLIST, "added_price", "REAL")
         _add_column(conn, T_WATCHLIST, "added_price_date", "TEXT")
+        execute(conn, f"UPDATE {T_WATCHLIST} SET user_email=? WHERE user_email IS NULL OR user_email=''", (default_owner,))
         execute(conn, f"""
             CREATE TABLE IF NOT EXISTS {T_HOLDINGS} (
                 id INTEGER PRIMARY KEY,
+                user_email TEXT NOT NULL DEFAULT '',
                 symbol TEXT NOT NULL,
                 buy_date TEXT NOT NULL,
                 quantity REAL NOT NULL,
@@ -69,9 +77,12 @@ def init_store() -> None:
                 updated_at {now_default}
             )
         """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        _add_column(conn, T_HOLDINGS, "user_email", "TEXT")
+        execute(conn, f"UPDATE {T_HOLDINGS} SET user_email=? WHERE user_email IS NULL OR user_email=''", (default_owner,))
         execute(conn, f"""
             CREATE TABLE IF NOT EXISTS {T_HOLDING_SALES} (
                 id INTEGER PRIMARY KEY,
+                user_email TEXT NOT NULL DEFAULT '',
                 holding_id INTEGER,
                 symbol TEXT NOT NULL,
                 sell_date TEXT NOT NULL,
@@ -86,9 +97,11 @@ def init_store() -> None:
                 created_at {now_default}
             )
         """.replace("id INTEGER PRIMARY KEY", f"id {id_type} PRIMARY KEY"))
+        _add_column(conn, T_HOLDING_SALES, "user_email", "TEXT")
         _add_column(conn, T_HOLDING_SALES, "buy_date", "TEXT")
         _add_column(conn, T_HOLDING_SALES, "buy_price", "REAL")
         _add_column(conn, T_HOLDING_SALES, "buy_amount", "REAL")
+        execute(conn, f"UPDATE {T_HOLDING_SALES} SET user_email=? WHERE user_email IS NULL OR user_email=''", (default_owner,))
         execute(conn, f"""
             CREATE TABLE IF NOT EXISTS {T_UI_SETTINGS} (
                 key TEXT PRIMARY KEY,
@@ -97,6 +110,47 @@ def init_store() -> None:
             )
         """)
         conn.commit()
+
+
+def _migrate_watchlist_user_scope(conn, default_owner: str) -> None:
+    if is_postgres():
+        try:
+            execute(conn, f"CREATE UNIQUE INDEX IF NOT EXISTS watchlist_user_symbol_idx ON {T_WATCHLIST} (user_email, symbol)")
+        except Exception:
+            pass
+        return
+    try:
+        table_sql = execute(
+            conn,
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='watchlist'",
+        ).fetchone()
+    except Exception:
+        return
+    create_sql = str(table_sql["sql"] if table_sql else "")
+    if "symbol TEXT NOT NULL UNIQUE" not in create_sql:
+        return
+    execute(conn, "ALTER TABLE watchlist RENAME TO watchlist_legacy_unique")
+    execute(conn, """
+        CREATE TABLE watchlist (
+            id INTEGER PRIMARY KEY,
+            user_email TEXT NOT NULL DEFAULT '',
+            symbol TEXT NOT NULL,
+            notes TEXT,
+            target_price REAL,
+            added_price REAL,
+            added_price_date TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(user_email, symbol)
+        )
+    """)
+    execute(conn, """
+        INSERT INTO watchlist
+            (id, user_email, symbol, notes, target_price, added_price, added_price_date, created_at, updated_at)
+        SELECT id, ?, symbol, notes, target_price, added_price, added_price_date, created_at, updated_at
+        FROM watchlist_legacy_unique
+    """, (default_owner,))
+    execute(conn, "DROP TABLE watchlist_legacy_unique")
 
 
 def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
@@ -113,36 +167,40 @@ def _add_column(conn, table: str, col: str, typedef: str) -> None:
             pass
 
 
-def add_watchlist(symbol: str, notes: str = "", target_price: float | None = None) -> dict:
+def add_watchlist(user_email: str, symbol: str, notes: str = "", target_price: float | None = None) -> dict:
     symbol = symbol.strip().upper()
     price = latest_prices([symbol]).get(symbol)
     added_price = price["close"] if price else None
     added_price_date = price["date"] if price else None
     with _connect() as conn:
-        existing = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
+        existing = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE user_email=? AND symbol=?", (user_email, symbol)).fetchone()
         if existing:
             row = existing
         else:
             execute(conn, f"""
                 INSERT INTO {T_WATCHLIST}
-                    (symbol, notes, target_price, added_price, added_price_date, updated_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
-            """, (symbol, notes.strip(), target_price, added_price, added_price_date))
-            row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE symbol=?", (symbol,)).fetchone()
+                    (user_email, symbol, notes, target_price, added_price, added_price_date, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (user_email, symbol, notes.strip(), target_price, added_price, added_price_date))
+            row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE user_email=? AND symbol=?", (user_email, symbol)).fetchone()
         conn.commit()
     result = _row_to_dict(row) or {}
     result["created"] = not bool(existing)
     return enrich_watchlist(result)
 
 
-def list_watchlist() -> list[dict]:
-    backfill_watchlist_added_prices()
+def list_watchlist(user_email: str) -> list[dict]:
+    backfill_watchlist_added_prices(user_email)
     with _connect() as conn:
-        rows = execute(conn, f"SELECT * FROM {T_WATCHLIST} ORDER BY created_at DESC, symbol").fetchall()
+        rows = execute(conn, f"""
+            SELECT * FROM {T_WATCHLIST}
+            WHERE user_email=?
+            ORDER BY created_at DESC, symbol
+        """, (user_email,)).fetchall()
     return enrich_watchlist_rows([dict(row) for row in rows])
 
 
-def update_watchlist(item_id: int, payload: dict[str, Any]) -> dict | None:
+def update_watchlist(user_email: str, item_id: int, payload: dict[str, Any]) -> dict | None:
     target_price = payload.get("target_price")
     notes = str(payload.get("notes") or "").strip()
     with _connect() as conn:
@@ -150,42 +208,42 @@ def update_watchlist(item_id: int, payload: dict[str, Any]) -> dict | None:
             row = execute(conn, f"""
                 UPDATE {T_WATCHLIST}
                 SET notes=?, target_price=?
-                WHERE id=?
+                WHERE id=? AND user_email=?
                 RETURNING *
-            """, (notes, target_price, item_id)).fetchone()
+            """, (notes, target_price, item_id, user_email)).fetchone()
         else:
             execute(conn, f"""
                 UPDATE {T_WATCHLIST}
                 SET notes=?, target_price=?
-                WHERE id=?
-            """, (notes, target_price, item_id))
-            row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE id=?", (item_id,)).fetchone()
+                WHERE id=? AND user_email=?
+            """, (notes, target_price, item_id, user_email))
+            row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE id=? AND user_email=?", (item_id, user_email)).fetchone()
         conn.commit()
     return enrich_watchlist(_row_to_dict(row) or {}) if row else None
 
 
-def delete_watchlist(item_id: int) -> None:
+def delete_watchlist(user_email: str, item_id: int) -> None:
     with _connect() as conn:
-        execute(conn, f"DELETE FROM {T_WATCHLIST} WHERE id=?", (item_id,))
+        execute(conn, f"DELETE FROM {T_WATCHLIST} WHERE id=? AND user_email=?", (item_id, user_email))
         conn.commit()
 
 
-def clear_watchlist() -> int:
+def clear_watchlist(user_email: str) -> int:
     with _connect() as conn:
-        cur = execute(conn, f"DELETE FROM {T_WATCHLIST}")
+        cur = execute(conn, f"DELETE FROM {T_WATCHLIST} WHERE user_email=?", (user_email,))
         deleted = getattr(cur, "rowcount", 0)
         conn.commit()
     return deleted
 
 
-def backfill_watchlist_added_prices() -> None:
+def backfill_watchlist_added_prices(user_email: str) -> None:
     with _connect() as conn:
         try:
             rows = execute(conn, f"""
                 SELECT id, symbol
                 FROM {T_WATCHLIST}
-                WHERE added_price IS NULL
-            """).fetchall()
+                WHERE user_email=? AND added_price IS NULL
+            """, (user_email,)).fetchall()
         except Exception:
             return
         missing = [dict(row) for row in rows]
@@ -204,30 +262,30 @@ def backfill_watchlist_added_prices() -> None:
         conn.commit()
 
 
-def add_holding(symbol: str, buy_date: str, quantity: float, buy_price: float, notes: str = "") -> dict:
+def add_holding(user_email: str, symbol: str, buy_date: str, quantity: float, buy_price: float, notes: str = "") -> dict:
     symbol = symbol.strip().upper()
     invested = round(float(quantity) * float(buy_price), 2)
     with _connect() as conn:
         if is_postgres():
             row = execute(conn, f"""
                 INSERT INTO {T_HOLDINGS}
-                    (symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                    (user_email, symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
                 RETURNING *
-            """, (symbol, buy_date, quantity, buy_price, invested, notes.strip())).fetchone()
+            """, (user_email, symbol, buy_date, quantity, buy_price, invested, notes.strip())).fetchone()
         else:
             cur = execute(conn, f"""
                 INSERT INTO {T_HOLDINGS}
-                    (symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-            """, (symbol, buy_date, quantity, buy_price, invested, notes.strip()))
+                    (user_email, symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (user_email, symbol, buy_date, quantity, buy_price, invested, notes.strip()))
             row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (cur.lastrowid,)).fetchone()
         conn.commit()
     return enrich_holding(_row_to_dict(row) or {})
 
 
-def update_holding(item_id: int, payload: dict[str, Any]) -> dict | None:
-    existing = get_holding(item_id)
+def update_holding(user_email: str, item_id: int, payload: dict[str, Any]) -> dict | None:
+    existing = get_holding(user_email, item_id)
     if not existing:
         return None
     symbol = str(payload.get("symbol", existing["symbol"])).strip().upper()
@@ -243,47 +301,52 @@ def update_holding(item_id: int, payload: dict[str, Any]) -> dict | None:
                 UPDATE {T_HOLDINGS}
                 SET symbol=?, buy_date=?, quantity=?, buy_price=?,
                     invested_amount=?, notes=?, updated_at=datetime('now')
-                WHERE id=?
+                WHERE id=? AND user_email=?
                 RETURNING *
-            """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id)).fetchone()
+            """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id, user_email)).fetchone()
         else:
             execute(conn, f"""
                 UPDATE {T_HOLDINGS}
                 SET symbol=?, buy_date=?, quantity=?, buy_price=?,
                     invested_amount=?, notes=?, updated_at=datetime('now')
-                WHERE id=?
-            """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id))
-            row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (item_id,)).fetchone()
+                WHERE id=? AND user_email=?
+            """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id, user_email))
+            row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email)).fetchone()
         conn.commit()
     return enrich_holding(_row_to_dict(row) or {})
 
 
-def get_holding(item_id: int) -> dict | None:
+def get_holding(user_email: str, item_id: int) -> dict | None:
     with _connect() as conn:
-        row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (item_id,)).fetchone()
+        row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email)).fetchone()
     return _row_to_dict(row)
 
 
-def list_holdings() -> list[dict]:
+def list_holdings(user_email: str) -> list[dict]:
     with _connect() as conn:
-        rows = execute(conn, f"SELECT * FROM {T_HOLDINGS} ORDER BY buy_date DESC, id DESC").fetchall()
+        rows = execute(conn, f"""
+            SELECT * FROM {T_HOLDINGS}
+            WHERE user_email=?
+            ORDER BY buy_date DESC, id DESC
+        """, (user_email,)).fetchall()
     return [enrich_holding(dict(row)) for row in rows]
 
 
-def delete_holding(item_id: int) -> None:
+def delete_holding(user_email: str, item_id: int) -> None:
     with _connect() as conn:
-        execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE id=?", (item_id,))
+        execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email))
         conn.commit()
 
 
 def sell_holding(
+    user_email: str,
     item_id: int,
     sell_date: str,
     quantity: float,
     sell_price: float,
     notes: str = "",
 ) -> dict[str, Any] | None:
-    holding = get_holding(item_id)
+    holding = get_holding(user_email, item_id)
     if not holding:
         return None
 
@@ -301,10 +364,11 @@ def sell_holding(
     with _connect() as conn:
         execute(conn, f"""
             INSERT INTO {T_HOLDING_SALES}
-                (holding_id, symbol, sell_date, quantity, buy_date, buy_price,
+                (user_email, holding_id, symbol, sell_date, quantity, buy_date, buy_price,
                  buy_amount, sell_price, sell_amount, realized_profit_loss, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
+            user_email,
             item_id,
             holding["symbol"],
             sell_date,
@@ -318,16 +382,16 @@ def sell_holding(
             notes.strip(),
         ))
         if remaining_qty <= 0:
-            execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE id=?", (item_id,))
+            execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email))
             next_holding = None
         else:
             remaining_invested = round(remaining_qty * buy_price, 2)
             execute(conn, f"""
                 UPDATE {T_HOLDINGS}
                 SET quantity=?, invested_amount=?, updated_at=datetime('now')
-                WHERE id=?
-            """, (remaining_qty, remaining_invested, item_id))
-            next_holding = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (item_id,)).fetchone()
+                WHERE id=? AND user_email=?
+            """, (remaining_qty, remaining_invested, item_id, user_email))
+            next_holding = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email)).fetchone()
         conn.commit()
 
     return {
@@ -341,7 +405,7 @@ def sell_holding(
     }
 
 
-def profit_loss_report(from_date: str, to_date: str) -> dict[str, Any]:
+def profit_loss_report(user_email: str, from_date: str, to_date: str) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
 
     with _connect() as conn:
@@ -359,10 +423,10 @@ def profit_loss_report(from_date: str, to_date: str) -> dict[str, Any]:
                 s.sell_amount,
                 s.realized_profit_loss
             FROM {T_HOLDING_SALES} s
-            LEFT JOIN {T_HOLDINGS} h ON h.id = s.holding_id
-            WHERE s.sell_date >= ? AND s.sell_date <= ?
+            LEFT JOIN {T_HOLDINGS} h ON h.id = s.holding_id AND h.user_email = s.user_email
+            WHERE s.user_email=? AND s.sell_date >= ? AND s.sell_date <= ?
             ORDER BY s.sell_date, s.symbol, s.id
-        """, (from_date, to_date)).fetchall()
+        """, (user_email, from_date, to_date)).fetchall()
 
     for row in sell_rows:
         item = dict(row)
@@ -404,14 +468,19 @@ def profit_loss_report(from_date: str, to_date: str) -> dict[str, Any]:
     }
 
 
-def delete_profit_loss_sale(sale_id: int) -> bool:
+def delete_profit_loss_sale(user_email: str, sale_id: int) -> bool:
     with _connect() as conn:
-        cursor = execute(conn, f"DELETE FROM {T_HOLDING_SALES} WHERE id=?", (sale_id,))
+        cursor = execute(conn, f"DELETE FROM {T_HOLDING_SALES} WHERE id=? AND user_email=?", (sale_id, user_email))
         conn.commit()
         return cursor.rowcount > 0
 
 
-def set_setting(key: str, value: str) -> None:
+def _setting_key(key: str, user_email: str | None = None) -> str:
+    return f"{user_email}:{key}" if user_email else key
+
+
+def set_setting(key: str, value: str, user_email: str | None = None) -> None:
+    storage_key = _setting_key(key, user_email)
     with _connect() as conn:
         execute(conn, f"""
             INSERT INTO {T_UI_SETTINGS} (key, value, updated_at)
@@ -419,21 +488,22 @@ def set_setting(key: str, value: str) -> None:
             ON CONFLICT(key) DO UPDATE SET
                 value=excluded.value,
                 updated_at=datetime('now')
-        """, (key, value))
+        """, (storage_key, value))
         conn.commit()
 
 
-def get_setting(key: str, default: str = "") -> str:
+def get_setting(key: str, default: str = "", user_email: str | None = None) -> str:
+    storage_key = _setting_key(key, user_email)
     with _connect() as conn:
-        row = execute(conn, f"SELECT value FROM {T_UI_SETTINGS} WHERE key=?", (key,)).fetchone()
+        row = execute(conn, f"SELECT value FROM {T_UI_SETTINGS} WHERE key=?", (storage_key,)).fetchone()
     return str(row["value"]) if row else default
 
 
-def get_settings(keys: dict[str, str]) -> dict[str, str]:
+def get_settings(keys: dict[str, str], user_email: str | None = None) -> dict[str, str]:
     values = {}
     with _connect() as conn:
         for key, default in keys.items():
-            row = execute(conn, f"SELECT value FROM {T_UI_SETTINGS} WHERE key=?", (key,)).fetchone()
+            row = execute(conn, f"SELECT value FROM {T_UI_SETTINGS} WHERE key=?", (_setting_key(key, user_email),)).fetchone()
             values[key] = str(row["value"]) if row else default
     return values
 
@@ -522,8 +592,8 @@ def enrich_holding(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def holdings_summary() -> dict[str, Any]:
-    rows = list_holdings()
+def holdings_summary(user_email: str) -> dict[str, Any]:
+    rows = list_holdings(user_email)
     invested = round(sum(float(row["invested_amount"] or 0) for row in rows), 2)
     current_rows = [row for row in rows if row.get("current_value") is not None]
     current = round(sum(float(row["current_value"] or 0) for row in current_rows), 2)

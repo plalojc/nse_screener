@@ -32,6 +32,7 @@ def _get_conn():
 def init_bhavcopy_db():
     conn = _get_conn()
     ensure_schemas(conn)
+    volume_type = "BIGINT" if is_postgres() else "INTEGER"
     execute(conn, f"""
         CREATE TABLE IF NOT EXISTS {T_BHAVCOPY_OHLCV} (
             symbol TEXT NOT NULL,
@@ -40,10 +41,12 @@ def init_bhavcopy_db():
             high   REAL,
             low    REAL,
             close  REAL,
-            volume INTEGER,
+            volume {volume_type},
             PRIMARY KEY (symbol, date)
         )
     """)
+    if is_postgres():
+        execute(conn, f"ALTER TABLE {T_BHAVCOPY_OHLCV} ALTER COLUMN volume TYPE BIGINT")
     timestamp_default = "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP" if is_postgres() else "TEXT DEFAULT (datetime('now'))"
     execute(conn, f"""
         CREATE TABLE IF NOT EXISTS {T_BHAVCOPY_FILES} (

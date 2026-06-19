@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, FileSearch, RefreshCw, Trash2, X } from "lucide-react";
-import { api, reportContentUrl, reportDownloadUrl } from "../api.js";
+import { api, getAccessToken, reportContentUrl, reportDownloadUrl } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
-import { useLoad } from "../hooks/useLoad.js";
+import { useAppData } from "../context/AppDataContext.jsx";
+import { useCachedLoad } from "../hooks/useCachedLoad.js";
 
-export function Reports() {
-  const { data, error, loading, refresh } = useLoad(() => api("/api/reports"), []);
+function reportHtmlCacheKey(report) {
+  return report ? `reportHtml:${report.kind}:${report.date}` : "";
+}
+
+export function Reports({ user }) {
+  const reportsLoader = () => api("/api/reports");
+  const { cache, loadKey, refreshKey } = useAppData();
+  const { data, error, loading, refresh } = useCachedLoad("reports", reportsLoader, []);
   const [selectedDate, setSelectedDate] = useState("");
   const [loadedDate, setLoadedDate] = useState("");
   const [message, setMessage] = useState("");
@@ -31,13 +38,35 @@ export function Reports() {
     setDeleteTarget(null);
     setSelectedDate("");
     setLoadedDate("");
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   function loadSelectedReport() {
     setMessage("");
     setLoadedDate(selectedDate);
   }
+
+  const selectedHtmlKey = reportHtmlCacheKey(selected);
+  const selectedHtml = selectedHtmlKey ? cache[selectedHtmlKey]?.data : "";
+  const selectedHtmlLoading = selectedHtmlKey ? cache[selectedHtmlKey]?.loading : false;
+
+  useEffect(() => {
+    if (!selected) return;
+    const key = reportHtmlCacheKey(selected);
+    loadKey(key, async () => {
+      const response = await fetch(reportContentUrl(selected));
+      if (!response.ok) {
+        throw new Error("Unable to load report content");
+      }
+      const html = await response.text();
+      const token = JSON.stringify(getAccessToken());
+      return html.replace(
+        'new URLSearchParams(window.location.search).get("token") || ""',
+        token
+      );
+    }).catch(() => {});
+  }, [selected?.date, selected?.kind]);
 
   return (
     <section className="reportsPage">
@@ -59,7 +88,7 @@ export function Reports() {
               <Download size={16} />Download HTML
             </a>
           )}
-          {selected && (
+          {selected && user?.is_admin && (
             <button className="iconDanger reportDeleteBtn" onClick={() => setDeleteTarget(selected)}>
               <Trash2 size={16} />Delete Report
             </button>
@@ -70,7 +99,8 @@ export function Reports() {
         {!loading && reports.length > 0 && loadedDate && !selected && (
           <Notice tone="danger">Report not available for {loadedDate}.</Notice>
         )}
-        {selected && <iframe className="reportFrame" title="Report" src={reportContentUrl(selected)} />}
+        {selected && selectedHtmlLoading && !selectedHtml && <Notice>Loading report...</Notice>}
+        {selected && selectedHtml && <iframe className="reportFrame" title="Report" srcDoc={selectedHtml} />}
       </div>
       {deleteTarget && (
         <div className="modalOverlay" onClick={() => setDeleteTarget(null)}>

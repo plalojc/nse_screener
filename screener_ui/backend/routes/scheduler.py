@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..auth import current_user, require_admin
 from ..runtime import scheduler_state, update_scheduler
 
 
@@ -17,12 +18,12 @@ class SchedulerRequest(BaseModel):
 
 
 @router.get("")
-def get_scheduler() -> dict[str, Any]:
+def get_scheduler(user=Depends(current_user)) -> dict[str, Any]:
     return scheduler_state()
 
 
 @router.put("")
-def set_scheduler(payload: SchedulerRequest) -> dict[str, Any]:
+def set_scheduler(payload: SchedulerRequest, user=Depends(require_admin)) -> dict[str, Any]:
     parts = payload.time.split(":", 1)
     if len(parts) != 2:
         raise HTTPException(status_code=400, detail="Time must be HH:MM")

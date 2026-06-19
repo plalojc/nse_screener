@@ -99,14 +99,20 @@ TABLES = [
         "source_db": UI_DB,
         "source_table": "watchlist",
         "target_table": table_name("watchlist", user_schema()),
-        "columns": ["symbol", "notes", "target_price", "created_at", "updated_at"],
-        "conflict": "(symbol) DO NOTHING",
+        "columns": [
+            "user_email", "symbol", "notes", "target_price", "added_price",
+            "added_price_date", "created_at", "updated_at",
+        ],
+        "conflict": "(user_email, symbol) DO NOTHING",
     },
     {
         "source_db": UI_DB,
         "source_table": "holdings",
         "target_table": table_name("holdings", user_schema()),
-        "columns": ["symbol", "buy_date", "quantity", "buy_price", "invested_amount", "notes", "created_at", "updated_at"],
+        "columns": [
+            "user_email", "symbol", "buy_date", "quantity", "buy_price",
+            "invested_amount", "notes", "created_at", "updated_at",
+        ],
         "conflict": None,
     },
     {
@@ -114,8 +120,9 @@ TABLES = [
         "source_table": "holding_sales",
         "target_table": table_name("holding_sales", user_schema()),
         "columns": [
-            "holding_id", "symbol", "sell_date", "quantity", "sell_price",
-            "sell_amount", "realized_profit_loss", "notes", "created_at",
+            "user_email", "holding_id", "symbol", "sell_date", "quantity",
+            "buy_date", "buy_price", "buy_amount", "sell_price", "sell_amount",
+            "realized_profit_loss", "notes", "created_at",
         ],
         "conflict": None,
     },

@@ -1,13 +1,68 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
+const ACCESS_KEY = "nse_screener_access_token";
+const REFRESH_KEY = "nse_screener_refresh_token";
+const USER_KEY = "nse_screener_user";
+const CACHE_PREFIX = "nse_screener_app_cache:";
+
+export function getAccessToken() {
+  return localStorage.getItem(ACCESS_KEY) || "";
+}
+
+export function getCurrentUser() {
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || "null");
+  } catch {
+    return null;
+  }
+}
+
+export function setSession(payload) {
+  localStorage.setItem(ACCESS_KEY, payload.access_token);
+  localStorage.setItem(REFRESH_KEY, payload.refresh_token);
+  localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
+}
+
+export function clearSession() {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem(USER_KEY);
+  for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+    const key = sessionStorage.key(index);
+    if (key?.startsWith(CACHE_PREFIX)) {
+      sessionStorage.removeItem(key);
+    }
+  }
+}
+
+async function refreshAccessToken() {
+  const refreshToken = localStorage.getItem(REFRESH_KEY);
+  if (!refreshToken) return false;
+  const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken })
+  });
+  if (!response.ok) {
+    clearSession();
+    return false;
+  }
+  setSession(await response.json());
+  return true;
+}
 
 export async function api(path, options = {}) {
+  const token = getAccessToken();
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {})
     },
     ...options
   });
+  if (response.status === 401 && !options.skipRefresh && await refreshAccessToken()) {
+    return api(path, { ...options, skipRefresh: true });
+  }
   if (!response.ok) {
     let message = response.statusText;
     try {
@@ -22,9 +77,23 @@ export async function api(path, options = {}) {
 }
 
 export function reportContentUrl(report) {
-  return `${API_BASE}/api/reports/${report.date}/content?kind=${report.kind}`;
+  return `${API_BASE}/api/reports/${report.date}/content?kind=${report.kind}&token=${encodeURIComponent(getAccessToken())}`;
 }
 
 export function reportDownloadUrl(report) {
-  return `${API_BASE}/api/reports/${report.date}/download?kind=${report.kind}`;
+  return `${API_BASE}/api/reports/${report.date}/download?kind=${report.kind}&token=${encodeURIComponent(getAccessToken())}`;
+}
+
+export function backupDownloadUrl() {
+  return `${API_BASE}/api/backup?token=${encodeURIComponent(getAccessToken())}`;
+}
+
+export async function login(username, password) {
+  const payload = await api("/api/auth/login", {
+    method: "POST",
+    skipRefresh: true,
+    body: JSON.stringify({ username, password })
+  });
+  setSession(payload);
+  return payload.user;
 }

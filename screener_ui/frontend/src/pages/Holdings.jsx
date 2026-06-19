@@ -4,7 +4,9 @@ import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
 import { Toast } from "../components/Toast.jsx";
-import { useLoad } from "../hooks/useLoad.js";
+import { useAppData } from "../context/AppDataContext.jsx";
+import { profitLossCacheKey } from "../context/AppDataContext.jsx";
+import { useCachedLoad } from "../hooks/useCachedLoad.js";
 import { money, number } from "../utils/format.js";
 import { openTradingView } from "../utils/tradingview.js";
 
@@ -15,8 +17,11 @@ function todayInputValue() {
 }
 
 export function Holdings() {
-  const { data, error, refresh } = useLoad(() => api("/api/holdings"), []);
-  const { data: settings } = useLoad(() => api("/api/settings"), []);
+  const holdingsLoader = () => api("/api/holdings");
+  const settingsLoader = () => api("/api/settings");
+  const { refreshKey } = useAppData();
+  const { data, error, refresh } = useCachedLoad("holdings", holdingsLoader, []);
+  const { data: settings } = useCachedLoad("settings", settingsLoader, []);
   const [form, setForm] = useState({
     symbol: "",
     buy_date: todayInputValue(),
@@ -62,7 +67,8 @@ export function Holdings() {
     });
     setForm({ ...form, symbol: "", quantity: "", buy_price: "", notes: "" });
     setMessage("Holding added.");
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   function startEdit(item) {
@@ -114,7 +120,8 @@ export function Holdings() {
     });
     setEditingId(null);
     setMessage(`${edit.symbol || item.symbol} updated.`);
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   function startSell(item) {
@@ -141,7 +148,11 @@ export function Holdings() {
     setSellingId(null);
     setSellingSymbol("");
     setMessage("Holding sale recorded.");
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+    const fromDate = todayInputValue().slice(0, 8) + "01";
+    const toDate = todayInputValue();
+    refreshKey(profitLossCacheKey(fromDate, toDate), () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`)).catch(() => {});
   }
 
   const editingItem = (data || []).find((item) => item.id === editingId);
@@ -256,7 +267,7 @@ export function Holdings() {
       )}
       {editingItem && (
         <div className="modalOverlay" onClick={() => cancelEdit(editingItem)}>
-          <form className="appModal holdingModal" onSubmit={(event) => { event.preventDefault(); saveEdit(editingItem); }} onClick={(event) => event.stopPropagation()}>
+          <form className="appModal holdingModal holdingEditModal" onSubmit={(event) => { event.preventDefault(); saveEdit(editingItem); }} onClick={(event) => event.stopPropagation()}>
             <div className="modalHeader">
               <div>
                 <h2>Edit {editingItem.symbol}</h2>
@@ -267,6 +278,46 @@ export function Holdings() {
               </button>
             </div>
             <div className="modalFormGrid">
+              <div className="modalReadOnlyGrid modalWide">
+                <div className="modalReadOnlyItem">
+                  <span>Current Symbol</span>
+                  <strong>{editingItem.symbol}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Buy Date</span>
+                  <strong>{editingItem.buy_date || "-"}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Quantity</span>
+                  <strong>{number(editingItem.quantity)}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Buy Price</span>
+                  <strong>{money(editingItem.buy_price)}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Invested</span>
+                  <strong>{money(editingItem.invested_amount)}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Current / Share</span>
+                  <strong>{money(editingItem.current_price)}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Total P/L</span>
+                  <strong className={(editingItem.profit_loss || 0) >= 0 ? "gain" : "loss"}>
+                    {money(editingItem.profit_loss)}
+                  </strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>P/L %</span>
+                  <strong>{editingItem.profit_loss_pct === null || editingItem.profit_loss_pct === undefined ? "-" : `${editingItem.profit_loss_pct}%`}</strong>
+                </div>
+                <div className="modalReadOnlyItem modalReadOnlyWide">
+                  <span>Current Notes</span>
+                  <strong>{editingItem.notes || "-"}</strong>
+                </div>
+              </div>
               <label>
                 Symbol
                 <input

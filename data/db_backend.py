@@ -82,6 +82,9 @@ def execute(conn, sql: str, params: Sequence[Any] | None = None):
 
 
 def executemany(conn, sql: str, params: Iterable[Sequence[Any] | dict[str, Any]]):
+    if is_postgres():
+        with conn.cursor() as cur:
+            return cur.executemany(adapt_sql(sql), params)
     return conn.executemany(adapt_sql(sql), params)
 
 

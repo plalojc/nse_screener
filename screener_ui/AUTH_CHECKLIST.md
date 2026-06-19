@@ -1,0 +1,22 @@
+# Auth And User Scope Checklist
+
+- [x] Login page accepts username/email and password.
+- [x] Successful login redirects into the existing dashboard/home experience.
+- [x] Logged-in email appears at the top-right with a Logout button.
+- [x] Dashboard Refresh button sits beside the Dashboard title.
+- [x] Backend authenticates with access JWT tokens expiring in 60 minutes.
+- [x] Backend issues refresh tokens expiring in 2 days.
+- [x] Users are loaded from `backend/users.json` for deployment setup.
+- [x] Hardcoded admin email is `plal.besu@gmail.com`.
+- [x] Admin sees a User Management page.
+- [x] Admin can add users and set/reset user passwords.
+- [x] Normal users can change their own password from Settings.
+- [x] Report/scan settings are visible only to admin.
+- [x] Normal users see only personal settings plus password change.
+- [x] Generated reports are shared across all users.
+- [x] Normal users can run scans/generate shared reports when a report does not already exist.
+- [x] Only admin can delete shared reports.
+- [x] Watchlist is scoped to the logged-in user.
+- [x] Holdings are scoped to the logged-in user.
+- [x] P/L report rows are scoped to the logged-in user.
+- [x] Settings are scoped to the logged-in user.

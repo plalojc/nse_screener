@@ -4,10 +4,11 @@ import asyncio
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..auth import CurrentUser, current_user, verify_token
 from ..reports import report_exists
 from ..runtime import jobs
 from ..scanner_runner import sse_event
@@ -38,7 +39,7 @@ def _effective_report_date(scan_date: str | None) -> str:
 
 
 @router.post("/run")
-def run_scan(payload: ScanRequest) -> dict[str, Any]:
+def run_scan(payload: ScanRequest, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     effective_date = _effective_report_date(payload.scan_date)
     if report_exists(effective_date):
         return {
@@ -62,17 +63,17 @@ def run_scan(payload: ScanRequest) -> dict[str, Any]:
                 "filename": f"NSE-Breakout-{effective_date}.html",
             },
         }
-    job = jobs.start_scan(scan_date=payload.scan_date, force_refresh=payload.force_refresh)
+    job = jobs.start_scan(scan_date=payload.scan_date, force_refresh=payload.force_refresh, user_email=user.email)
     return job.snapshot()
 
 
 @router.get("/jobs")
-def scan_jobs() -> list[dict[str, Any]]:
+def scan_jobs(user: CurrentUser = Depends(current_user)) -> list[dict[str, Any]]:
     return jobs.list_jobs()
 
 
 @router.get("/jobs/{job_id}")
-def scan_job(job_id: str) -> dict[str, Any]:
+def scan_job(job_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Scan job not found")
@@ -80,7 +81,11 @@ def scan_job(job_id: str) -> dict[str, Any]:
 
 
 @router.get("/jobs/{job_id}/events")
-async def scan_events(job_id: str) -> StreamingResponse:
+async def scan_events(job_id: str, token: str | None = None) -> StreamingResponse:
+    if token:
+        verify_token(token, "access")
+    else:
+        raise HTTPException(status_code=401, detail="Login required")
     job = jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Scan job not found")
@@ -99,3 +104,4 @@ async def scan_events(job_id: str) -> StreamingResponse:
             await asyncio.sleep(0.8)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+from ..auth import CurrentUser, current_user, verify_token

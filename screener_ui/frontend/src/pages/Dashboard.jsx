@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { CalendarClock, Play, RefreshCw } from "lucide-react";
-import { API_BASE, api } from "../api.js";
+import { API_BASE, api, getAccessToken } from "../api.js";
 import { Metric } from "../components/Metric.jsx";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
 import { Progress } from "../components/Progress.jsx";
-import { useLoad } from "../hooks/useLoad.js";
+import { useAppData } from "../context/AppDataContext.jsx";
+import { useCachedLoad } from "../hooks/useCachedLoad.js";
 import { money } from "../utils/format.js";
 
 function todayInputValue() {
@@ -14,8 +15,10 @@ function todayInputValue() {
   return new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
 }
 
-export function Dashboard() {
-  const { data, error, loading, refresh } = useLoad(() => api("/api/dashboard"), []);
+export function Dashboard({ user }) {
+  const dashboardLoader = () => api("/api/dashboard");
+  const { refreshKey } = useAppData();
+  const { data, error, loading, refresh } = useCachedLoad("dashboard", dashboardLoader, []);
   const [job, setJob] = useState(null);
   const [lines, setLines] = useState([]);
   const [scanDate, setScanDate] = useState(todayInputValue);
@@ -28,13 +31,14 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!job?.id || ["success", "failed"].includes(job.status)) return;
-    const source = new EventSource(`${API_BASE}/api/scan/jobs/${job.id}/events`);
+    const source = new EventSource(`${API_BASE}/api/scan/jobs/${job.id}/events?token=${encodeURIComponent(getAccessToken())}`);
     source.addEventListener("snapshot", (event) => {
       const next = JSON.parse(event.data);
       setJob(next);
       if (["success", "failed"].includes(next.status)) {
         source.close();
         refresh();
+        refreshKey("reports", () => api("/api/reports")).catch(() => {});
       }
     });
     source.addEventListener("line", (event) => {
@@ -55,6 +59,7 @@ export function Dashboard() {
         setLines(next.lines || []);
         if (["success", "failed"].includes(next.status)) {
           refresh();
+          refreshKey("reports", () => api("/api/reports")).catch(() => {});
         }
       } catch {
         // EventSource remains the primary channel; polling is only a fallback.
@@ -75,6 +80,7 @@ export function Dashboard() {
     setJob(next);
     if (next.status === "skipped") {
       refresh();
+      refreshKey("reports", () => api("/api/reports")).catch(() => {});
     }
   }
 
@@ -88,6 +94,7 @@ export function Dashboard() {
   }
 
   const holdings = data?.holdings || {};
+  const isAdmin = Boolean(user?.is_admin || data?.is_admin);
   return (
     <section>
       <PageTitle title="Dashboard" action={<button onClick={refresh}><RefreshCw size={16} />Refresh</button>} />
@@ -103,7 +110,7 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="twoCol">
+      <div className={isAdmin ? "twoCol" : "singleCol"}>
         <div className="panel">
           <div className="panelHeader">
             <h2>Scanner</h2>
@@ -128,38 +135,40 @@ export function Dashboard() {
           <Progress job={job || data?.latest_job} lines={lines.length ? lines : data?.latest_job?.lines || []} />
         </div>
 
-        <div className="panel">
-          <div className="panelHeader">
-            <h2>Schedule</h2>
-            <button onClick={saveSchedule}><CalendarClock size={16} />Save</button>
+        {isAdmin && (
+          <div className="panel">
+            <div className="panelHeader">
+              <h2>Schedule</h2>
+              <button onClick={saveSchedule}><CalendarClock size={16} />Save</button>
+            </div>
+            <div className="formGrid">
+              <label>
+                Time
+                <input
+                  type="time"
+                  value={scheduler.time || "08:20"}
+                  onChange={(e) => setScheduler({ ...scheduler, time: e.target.value })}
+                />
+              </label>
+              <label className="checkLine">
+                <input
+                  type="checkbox"
+                  checked={Boolean(scheduler.enabled)}
+                  onChange={(e) => setScheduler({ ...scheduler, enabled: e.target.checked })}
+                />
+                Enabled
+              </label>
+            </div>
+            <div className="scheduleMeta">
+              <span>Next run</span>
+              <strong>{scheduler.next_run_time || "-"}</strong>
+            </div>
+            <div className="scheduleMeta">
+              <span>Latest report</span>
+              <strong>{data?.latest_report?.filename || "-"}</strong>
+            </div>
           </div>
-          <div className="formGrid">
-            <label>
-              Time
-              <input
-                type="time"
-                value={scheduler.time || "08:20"}
-                onChange={(e) => setScheduler({ ...scheduler, time: e.target.value })}
-              />
-            </label>
-            <label className="checkLine">
-              <input
-                type="checkbox"
-                checked={Boolean(scheduler.enabled)}
-                onChange={(e) => setScheduler({ ...scheduler, enabled: e.target.checked })}
-              />
-              Enabled
-            </label>
-          </div>
-          <div className="scheduleMeta">
-            <span>Next run</span>
-            <strong>{scheduler.next_run_time || "-"}</strong>
-          </div>
-          <div className="scheduleMeta">
-            <span>Latest report</span>
-            <strong>{data?.latest_report?.filename || "-"}</strong>
-          </div>
-        </div>
+        )}
       </div>
     </section>
   );

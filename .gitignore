@@ -21,6 +21,7 @@ screener_ui/logs/
 
 # Environment / secrets - never commit real keys
 .env
+screener_ui/backend/users.json
 
 # Database (local SQLite data - not shared)
 *.db

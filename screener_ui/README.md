@@ -36,14 +36,43 @@ screener_ui/
 |       |-- utils/
 ```
 
-## Backend
+## Production: Backend + UI Together
 
-Backend scripts live in the project root:
+From the project root, use the combined launcher. It builds the React UI and
+starts FastAPI as the only server process:
+
+```powershell
+.\run_screener.bat start
+.\run_screener.bat stop
+.\run_screener.bat restart
+.\run_screener.bat status
+```
+
+On Linux:
+
+```sh
+chmod +x ./run_screener.sh
+./run_screener.sh start
+./run_screener.sh stop
+./run_screener.sh restart
+./run_screener.sh status
+```
+
+Default URL: `http://127.0.0.1:8787`
+
+Override with `SCREENER_HOST` and `SCREENER_PORT` if the remote server needs a
+different bind address or port.
+
+## Runtime
+
+Use the root combined launcher for both backend and UI:
 
 ```powershell
 cd C:\sharemarketWork\ShareMarketDemo\nse_breakout_agent
-.\run_backend.ps1
-.\stop_backend.ps1
+.\run_screener.bat start
+.\run_screener.bat stop
+.\run_screener.bat restart
+.\run_screener.bat status
 ```
 
 By default the backend uses the parent folder as the scanner root. If this UI
@@ -59,19 +88,13 @@ If you want to use a specific Python interpreter, set:
 $env:SCREENER_AGENT_PYTHON="C:\sharemarketWork\ShareMarketDemo\nse_breakout_agent\venv\Scripts\python.exe"
 ```
 
-## Frontend
+## Frontend Development
 
 From `screener_ui\frontend`:
 
 ```powershell
 npm install
-```
-
-From `screener_ui`:
-
-```powershell
-.\run_ui.ps1
-.\stop_ui.ps1
+npm run dev
 ```
 
 Open `http://127.0.0.1:5173` for Vite dev mode.
@@ -84,5 +107,5 @@ npm run build
 ```
 
 The FastAPI app serves `frontend/dist` automatically when the build exists.
-In production mode you only need the root `.\run_backend.ps1` and then open
+In production mode you only need the root `.\run_screener.bat start` and then open
 `http://127.0.0.1:8787`.

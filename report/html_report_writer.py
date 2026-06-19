@@ -86,7 +86,42 @@ _PAGE_HEAD = """\
         .modalBlock {{ border-top:1px solid #e2e8f0; padding-top:12px; margin-top:12px; }}
         .modalBlock .label {{ color:#17212f; display:block; font-weight:700; margin-bottom:4px; }}
         .modal a {{ color:#1f6f54; font-weight:700; }}
-        @media (max-width:720px) {{ .modalGrid {{ grid-template-columns:1fr; }} }}
+        @media (max-width:900px) {{
+            body {{ font-size:11px; margin:8px; }}
+            h2 {{ font-size:17px; }}
+            h3 {{ font-size:14px; }}
+            p {{ font-size:11px; line-height:1.35; }}
+            table {{ table-layout:fixed; }}
+            th, td {{ font-size:11px; padding:4px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+            .modalGrid {{ grid-template-columns:1fr; }}
+            table th:nth-child(8), table td:nth-child(8),
+            table th:nth-child(11), table td:nth-child(11),
+            table th:nth-child(12), table td:nth-child(12) {{ display:none; }}
+            table th:nth-child(1), table td:nth-child(1) {{ width:26px; }}
+            table th:nth-child(2), table td:nth-child(2) {{ width:30%; }}
+            table th:nth-child(5), table td:nth-child(5) {{ width:72px; }}
+            table th:nth-child(9), table td:nth-child(9) {{ width:48px; }}
+            table th:nth-child(10), table td:nth-child(10) {{ width:86px; }}
+            td.slCell {{ min-width:26px; width:26px; }}
+            td.slCell .slNo {{ font-size:10px; }}
+            .watch-btn {{ height:20px; width:20px; font-size:13px; }}
+        }}
+        @media (max-width:520px) {{
+            body {{ margin:6px; }}
+            table th:nth-child(3), table td:nth-child(3),
+            table th:nth-child(4), table td:nth-child(4),
+            table th:nth-child(6), table td:nth-child(6),
+            table th:nth-child(7), table td:nth-child(7) {{ display:none; }}
+            table th:nth-child(1), table td:nth-child(1) {{ width:24px; }}
+            table th:nth-child(2), table td:nth-child(2) {{ width:31%; }}
+            table th:nth-child(5), table td:nth-child(5) {{ width:70px; }}
+            table th:nth-child(9), table td:nth-child(9) {{ width:46px; }}
+            table th:nth-child(10), table td:nth-child(10) {{ width:82px; }}
+            th, td {{ font-size:10.5px; padding:4px 3px; }}
+            td.slCell {{ min-width:24px; width:24px; }}
+            td.slCell .slNo {{ font-size:10px; }}
+            .watch-btn {{ height:18px; width:18px; font-size:12px; }}
+        }}
     </style>
     <script>
         function openChart(symbol) {{
@@ -113,9 +148,13 @@ _PAGE_HEAD = """\
         }}
         async function addToWatchlist(symbol, button) {{
             try {{
+                var token = new URLSearchParams(window.location.search).get("token") || "";
                 var response = await fetch("/api/watchlist", {{
                     method: "POST",
-                    headers: {{ "Content-Type": "application/json" }},
+                    headers: {{
+                        "Content-Type": "application/json",
+                        "Authorization": token ? "Bearer " + token : ""
+                    }},
                     body: JSON.stringify({{
                         symbol: symbol,
                         notes: "Added from report {date}",

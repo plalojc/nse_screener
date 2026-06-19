@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { Metric } from "../components/Metric.jsx";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { profitLossCacheKey, useAppData } from "../context/AppDataContext.jsx";
 import { money, number } from "../utils/format.js";
 
 function todayInputValue() {
@@ -39,17 +40,21 @@ function pnlDisplay(profitLoss, buyAmount) {
 export function ProfitLossReport() {
   const [fromDate, setFromDate] = useState(monthStartValue());
   const [toDate, setToDate] = useState(todayInputValue());
-  const [data, setData] = useState(null);
+  const [cacheKey, setCacheKey] = useState(() => profitLossCacheKey(monthStartValue(), todayInputValue()));
   const [deleteRow, setDeleteRow] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const { bootstrapped, cache, loadKey, refreshKey } = useAppData();
+  const data = cache[cacheKey]?.data || null;
 
   async function loadReport(event) {
     event?.preventDefault();
     setLoading(true);
     setError("");
     try {
-      setData(await api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`));
+      const nextKey = profitLossCacheKey(fromDate, toDate);
+      setCacheKey(nextKey);
+      await refreshKey(nextKey, () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`));
     } catch (err) {
       setError(err.message || "Unable to load P/L report");
     } finally {
@@ -58,8 +63,11 @@ export function ProfitLossReport() {
   }
 
   useEffect(() => {
-    loadReport();
-  }, []);
+    if (!bootstrapped && !cache[cacheKey]?.loaded) return;
+    loadKey(cacheKey, () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`)).catch((err) => {
+      setError(err.message || "Unable to load P/L report");
+    });
+  }, [bootstrapped, cacheKey]);
 
   async function confirmDelete() {
     if (!deleteRow) return;
@@ -68,7 +76,7 @@ export function ProfitLossReport() {
     try {
       await api(`/api/profit-loss/${deleteRow.id}`, { method: "DELETE" });
       setDeleteRow(null);
-      await loadReport();
+      await refreshKey(cacheKey, () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`));
     } catch (err) {
       setError(err.message || "Unable to delete P/L row");
     } finally {
@@ -105,7 +113,7 @@ export function ProfitLossReport() {
           <Metric label="Profit / Loss" value={money(summary.profit_loss)} tone={pnlClass(summary.profit_loss)} />
         </div>
 
-        <div>
+        <div className="tableWrap plTableWrap">
           <table className="holdingsTable plTable">
             <thead>
               <tr>

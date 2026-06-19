@@ -75,11 +75,11 @@ def delete_report(report_date: str) -> int:
     return delete_breakout_log(report_date)
 
 
-def render_report(report_date: str) -> str | None:
+def render_report(report_date: str, user_email: str | None = None) -> str | None:
     signals = load_report_signals(report_date)
     if not signals:
         return None
-    settings = app_settings()
+    settings = app_settings(user_email)
     return render_html_report(
         signals,
         scan_date=report_date,

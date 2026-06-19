@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..auth import CurrentUser, current_user
 from ..reports import list_reports
 from ..runtime import jobs, scheduler_state
 from ..settings import AGENT_ROOT
@@ -19,14 +20,15 @@ def health() -> dict[str, Any]:
 
 
 @router.get("/dashboard")
-def dashboard() -> dict[str, Any]:
+def dashboard(user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     reports = list_reports()
     latest_job = jobs.latest()
     return {
         "latest_report": reports[0] if reports else None,
         "latest_job": latest_job.snapshot() if latest_job else None,
         "reports_count": len(reports),
-        "watchlist_count": len(list_watchlist()),
-        "holdings": holdings_summary(),
+        "watchlist_count": len(list_watchlist(user.email)),
+        "holdings": holdings_summary(user.email),
+        "is_admin": user.is_admin,
         "scheduler": scheduler_state(),
     }

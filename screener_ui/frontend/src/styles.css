@@ -72,6 +72,8 @@ select:focus {
 .sidebar {
   background: #17212f;
   color: white;
+  display: flex;
+  flex-direction: column;
   padding: 18px 14px;
   transform: translateX(0);
   transition: transform 180ms ease, visibility 180ms ease;
@@ -107,7 +109,16 @@ select:focus {
   align-items: center;
   display: flex;
   gap: 12px;
+  justify-content: flex-start;
   margin-bottom: 28px;
+  min-width: 0;
+}
+
+.brandIdentity {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
 }
 
 .brandMark {
@@ -120,15 +131,23 @@ select:focus {
   width: 38px;
 }
 
-.brand strong,
-.brand span {
+.brandText {
+  min-width: 0;
+}
+
+.brandText strong,
+.brandText span {
   display: block;
 }
 
-.brand span {
+.brandText span {
   color: #aebacd;
   font-size: 12px;
   margin-top: 2px;
+}
+
+.brandText strong {
+  white-space: nowrap;
 }
 
 .sidebar nav {
@@ -149,10 +168,49 @@ select:focus {
   color: white;
 }
 
+.sidebarAccount {
+  border-top: 1px solid #25364b;
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.sidebarAccount span {
+  color: #cfd8e6;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarAccount button {
+  justify-content: center;
+  width: 100%;
+}
+
+.sidebarAccount .accountLogoutText {
+  display: inline;
+}
+
+.mobileAccount {
+  display: none;
+}
+
 .content {
   min-width: 0;
   overflow-x: hidden;
   padding: 24px;
+  position: relative;
+}
+
+.viewPane {
+  display: none;
+}
+
+.viewPane.active {
+  display: block;
 }
 
 .sidebarHidden .content {
@@ -162,8 +220,10 @@ select:focus {
 .pageTitle {
   align-items: center;
   display: flex;
-  justify-content: space-between;
+  gap: 12px;
+  justify-content: flex-start;
   margin-bottom: 16px;
+  padding-right: 360px;
 }
 
 .pageTitle h1 {
@@ -177,6 +237,64 @@ select:focus {
   gap: 12px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 14px;
+}
+
+.userBar {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-bottom: 0;
+  position: absolute;
+  right: 24px;
+  top: 24px;
+  z-index: 20;
+}
+
+.userBar span {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.loginShell {
+  align-items: center;
+  background: #eef2f6;
+  display: flex;
+  min-height: 100vh;
+  justify-content: center;
+  padding: 24px;
+}
+
+.loginCard {
+  background: white;
+  border: 1px solid #d8e0ea;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+  width: min(420px, 100%);
+}
+
+.loginCard h1,
+.loginCard p {
+  margin: 0;
+}
+
+.loginCard p {
+  color: #64748b;
+}
+
+.loginMark {
+  align-items: center;
+  background: #30a46c;
+  color: white;
+  display: flex;
+  font-size: 22px;
+  font-weight: 800;
+  height: 48px;
+  justify-content: center;
+  width: 48px;
 }
 
 .metric,
@@ -204,6 +322,12 @@ select:focus {
   display: grid;
   gap: 14px;
   grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.55fr);
+}
+
+.singleCol {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .panel {
@@ -308,6 +432,23 @@ select:focus {
 
 .settingsForm button {
   justify-self: start;
+}
+
+.settingsBackup {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.settingsBackup h2 {
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+
+.settingsBackup p {
+  color: #66758a;
+  margin: 0;
 }
 
 .secondaryBtn {
@@ -972,6 +1113,54 @@ tr:hover .hoverActionCell .slAddBtn {
   padding: 18px;
 }
 
+.modalReadOnlyGrid {
+  display: grid;
+  gap: 5px 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0;
+}
+
+.modalReadOnlyItem {
+  align-items: baseline;
+  display: grid;
+  gap: 2px;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
+  padding: 0;
+}
+
+.modalReadOnlyItem span {
+  color: #66758a;
+  display: inline;
+  font-size: 11px;
+  margin: 0;
+}
+
+.modalReadOnlyItem span::after {
+  content: ":";
+}
+
+.modalReadOnlyItem strong {
+  color: #182230;
+  display: inline;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modalReadOnlyItem strong.gain {
+  color: #2f6f46;
+}
+
+.modalReadOnlyItem strong.loss {
+  color: #9f2f23;
+}
+
+.modalReadOnlyWide {
+  grid-column: span 3;
+}
+
 .modalWide {
   grid-column: 1 / -1;
 }
@@ -997,6 +1186,7 @@ tr:hover .hoverActionCell .slAddBtn {
 
 @media (max-width: 980px) {
   .appShell {
+    align-items: start;
     grid-template-columns: 1fr;
   }
 
@@ -1005,22 +1195,78 @@ tr:hover .hoverActionCell .slAddBtn {
   }
 
   .sidebar {
+    align-self: start;
+    padding: 12px;
     position: static;
   }
 
   .sidebar.hidden {
+    display: flex;
+    transform: none;
+    visibility: visible;
+  }
+
+  .sidebarToggle {
     display: none;
   }
 
-  .sidebarToggle,
-  .sidebarHidden .sidebarToggle {
-    left: 18px;
-    top: 14px;
-    transform: none;
+  .brand {
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .brandText strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .sidebar nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .sidebar nav button {
+    justify-content: center;
+    min-height: 40px;
+    padding: 8px;
+  }
+
+  .sidebar nav .navLabel {
+    display: none;
+  }
+
+  .sidebarAccount {
+    align-items: center;
+    border-top: 0;
+    display: flex;
+    flex: 0 1 auto;
+    gap: 8px;
+    justify-content: flex-end;
+    min-width: 0;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .desktopAccount {
+    display: none;
+  }
+
+  .mobileAccount {
+    display: flex;
+  }
+
+  .sidebarAccount span {
+    font-size: 11px;
+    max-width: 120px;
+  }
+
+  .sidebarAccount button {
+    min-height: 30px;
+    padding: 6px 8px;
+    width: auto;
+  }
+
+  .sidebarAccount .accountLogoutText {
+    display: none;
   }
 
   .twoCol,
@@ -1030,49 +1276,485 @@ tr:hover .hoverActionCell .slAddBtn {
   .plFilterForm,
   .sellForm,
   .modalFormGrid,
+  .reportToolbar,
   .settingsForm {
     grid-template-columns: 1fr;
+  }
+
+  .reportsPage {
+    height: auto;
+    min-height: calc(100vh - 48px);
+  }
+
+  .reportsPanel {
+    overflow: visible;
+  }
+
+  .reportFrame {
+    min-height: 70vh;
   }
 
   .modalWide {
     grid-column: auto;
   }
 
+  .modalReadOnlyGrid,
+  .modalReadOnlyWide {
+    grid-column: auto;
+  }
+
+  .modalReadOnlyGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .settingsForm .checkLine {
     grid-column: auto;
   }
 
-  .sidebarHidden .content {
-    padding-left: 64px;
+  .settingsBackup {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settingsBackup .downloadBtn {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .pageTitle {
+    padding-right: 0;
   }
 }
 
 @media (max-width: 640px) {
+  .loginShell {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .loginCard {
+    align-self: center;
+    box-shadow: none;
+    padding: 18px;
+  }
+
   .content {
     padding: 18px 12px;
   }
 
-  .sidebarHidden .content {
-    padding-left: 56px;
-  }
-
   .pageTitle {
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 10px;
+    padding-right: 0;
   }
 
   .pageTitle h1 {
     font-size: 22px;
   }
 
+  .pageTitle button {
+    min-height: 32px;
+    padding: 6px 10px;
+  }
+
+  .brand {
+    align-items: center;
+    gap: 8px;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .brandMark {
+    height: 34px;
+    width: 34px;
+  }
+
+  .brandIdentity {
+    gap: 8px;
+  }
+
+  .brandText strong {
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .brandText span {
+    font-size: 11px;
+  }
+
+  .sidebar nav {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .sidebar nav button {
+    min-height: 36px;
+    padding: 7px 4px;
+  }
+
+  .sidebar nav button svg {
+    height: 17px;
+    width: 17px;
+  }
+
+  .sidebarAccount {
+    justify-content: flex-end;
+  }
+
+  .sidebarAccount span {
+    max-width: 118px;
+  }
+
+  .sidebarAccount button {
+    min-height: 32px;
+    padding: 6px 9px;
+  }
+
+  .metric strong {
+    font-size: 18px;
+  }
+
+  .metricGrid {
+    gap: 8px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric {
+    min-height: 72px;
+    padding: 10px 12px;
+  }
+
+  .metric span {
+    font-size: 11px;
+    margin-bottom: 5px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
   .reportToolbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reportToolbar input {
+    grid-column: 1 / -1;
+  }
+
+  .downloadBtn,
+  .reportToolbar button {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .downloadBtn,
+  .reportToolbar button {
+    font-size: 13px;
+    min-height: 34px;
+    padding: 6px 8px;
+  }
+
+  .tableWrap,
+  .reportsPanel {
+    overflow-x: hidden;
+  }
+
+  .watchlistTable,
+  .holdingsTable,
+  .plTable,
+  .userTable {
+    font-size: 11px;
+  }
+
+  .watchlistTable,
+  .holdingsTable {
+    min-width: 0;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .watchlistTable th,
+  .watchlistTable td,
+  .holdingsTable th,
+  .holdingsTable td {
+    font-size: 10px;
+    line-height: 1.15;
+    padding: 3px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .watchlistTable .symbolLink,
+  .holdingsTable .symbolLink {
+    font-size: 10px;
+    min-height: 20px;
+  }
+
+  .watchlistTable .symbolLink svg,
+  .holdingsTable .symbolLink svg {
+    height: 11px;
+    width: 11px;
+  }
+
+  .watchlistTable th:nth-child(1),
+  .watchlistTable td:nth-child(1) {
+    width: 28px;
+  }
+
+  .watchlistTable th:nth-child(3),
+  .watchlistTable td:nth-child(3),
+  .watchlistTable th:nth-child(7),
+  .watchlistTable td:nth-child(7),
+  .watchlistTable th:nth-child(8),
+  .watchlistTable td:nth-child(8),
+  .holdingsTable th:nth-child(1),
+  .holdingsTable td:nth-child(1) {
+    width: 28px;
+  }
+
+  .holdingsTable th:nth-child(3),
+  .holdingsTable td:nth-child(3),
+  .holdingsTable th:nth-child(6),
+  .holdingsTable td:nth-child(6),
+  .holdingsTable th:nth-child(9),
+  .holdingsTable td:nth-child(9),
+  .holdingsTable th:nth-child(10),
+  .holdingsTable td:nth-child(10) {
+    display: none;
+  }
+
+  .watchlistTable .slCol {
+    width: 28px;
+  }
+
+  .holdingsTable .slCol {
+    width: 28px;
+  }
+
+  .watchlistTable .slNo {
+    font-size: 9px;
+  }
+
+  .watchlistTable .slAddBtn {
+    height: 17px;
+    min-height: 17px;
+    width: 17px;
+  }
+
+  .watchlistTable .slAddBtn svg {
+    height: 11px;
+    width: 11px;
+  }
+
+  .watchlistTable th:nth-child(2),
+  .watchlistTable td:nth-child(2),
+  .holdingsTable th:nth-child(2),
+  .holdingsTable td:nth-child(2) {
+    width: 30%;
+  }
+
+  .watchlistTable th:nth-child(4),
+  .watchlistTable td:nth-child(4),
+  .watchlistTable th:nth-child(5),
+  .watchlistTable td:nth-child(5),
+  .watchlistTable th:nth-child(6),
+  .watchlistTable td:nth-child(6),
+  .holdingsTable th:nth-child(4),
+  .holdingsTable td:nth-child(4),
+  .holdingsTable th:nth-child(5),
+  .holdingsTable td:nth-child(5),
+  .holdingsTable th:nth-child(7),
+  .holdingsTable td:nth-child(7),
+  .holdingsTable th:nth-child(8),
+  .holdingsTable td:nth-child(8) {
+    width: 16%;
+  }
+
+  .watchlistTable th:nth-child(9),
+  .watchlistTable td:nth-child(9),
+  .holdingsTable th:nth-child(11),
+  .holdingsTable td:nth-child(11) {
+    width: 70px;
+  }
+
+  .watchlistTable .rowActions,
+  .holdingsTable .rowActions {
+    gap: 4px;
+    justify-content: center;
+  }
+
+  .watchlistTable .rowActions button,
+  .holdingsTable .rowActions button {
+    min-height: 24px;
+    min-width: 24px;
+    padding: 3px 5px;
+  }
+
+  .holdingsTable .rowActions .smallBtn {
+    font-size: 0;
+    min-width: 24px;
+  }
+
+  .holdingsTable .rowActions .smallBtn svg {
+    height: 13px;
+    width: 13px;
+  }
+
+  .holdingsTable .rowActions .sellBtn::after {
+    content: "S";
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .plTableWrap {
+    overflow-x: hidden;
+  }
+
+  .plTable {
+    min-width: 0;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .plTable th,
+  .plTable td {
+    display: table-cell;
+    font-size: 9.5px;
+    line-height: 1.15;
+    overflow: hidden;
+    padding: 3px 3px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .plTable th:nth-child(4),
+  .plTable td:nth-child(4),
+  .plTable th:nth-child(5),
+  .plTable td:nth-child(5),
+  .plTable th:nth-child(7),
+  .plTable td:nth-child(7),
+  .plTable th:nth-child(8),
+  .plTable td:nth-child(8) {
+    display: none;
+  }
+
+  .plTable th:nth-child(1),
+  .plTable td:nth-child(1) {
+    width: 24px;
+  }
+
+  .plTable th:nth-child(2),
+  .plTable td:nth-child(2) {
+    width: 25%;
+  }
+
+  .plTable th:nth-child(3),
+  .plTable td:nth-child(3) {
+    width: 42px;
+  }
+
+  .plTable th:nth-child(6),
+  .plTable td:nth-child(6),
+  .plTable th:nth-child(9),
+  .plTable td:nth-child(9) {
+    width: 21%;
+  }
+
+  .plTable th:nth-child(10),
+  .plTable td:nth-child(10) {
+    width: 76px;
+  }
+
+  .plTable tfoot {
+    display: none;
+  }
+
+  .plTable .pnlCell {
+    gap: 2px;
+  }
+
+  .plTable .pnlText {
+    min-width: 0;
+  }
+
+  .plTable .pnlAmount,
+  .plTable .pnlPct {
+    font-size: 9.5px;
+  }
+
+  .plTable .plDeleteBtn {
+    min-height: 20px;
+    padding: 2px;
+  }
+
+  .plTable th:nth-child(10),
+  .plTable td:nth-child(10) {
+    width: 128px;
+  }
+
+  .pnlCell {
+    gap: 4px;
+  }
+
+  .modalOverlay {
+    padding: 12px;
+  }
+
+  .appModal {
+    max-height: calc(100vh - 24px);
+    width: min(100%, calc(100vw - 24px));
+  }
+
+  .modalFormGrid {
+    gap: 9px;
+    padding: 12px;
+  }
+
+  .holdingEditModal .modalFormGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .holdingEditModal .modalWide {
+    grid-column: 1 / -1;
+  }
+
+  .modalReadOnlyGrid {
+    gap: 4px 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .modalReadOnlyItem span {
+    font-size: 9px;
+    margin-bottom: 2px;
+  }
+
+  .modalReadOnlyItem strong {
+    font-size: 10px;
+  }
+
+  .modalHeader,
+  .modalActions,
+  .confirmBody {
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .modalActions,
   .rowActions {
     justify-content: flex-start;
+  }
+
+  .holdingEditModal .modalActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .holdingEditModal .modalActions button {
+    justify-content: center;
+    width: 100%;
   }
 
   .modalActions button,

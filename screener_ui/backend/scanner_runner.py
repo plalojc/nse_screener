@@ -58,6 +58,7 @@ def public_message(line: str, fallback: str) -> str:
 @dataclass
 class ScanJob:
     id: str
+    user_email: str | None = None
     status: str = "queued"
     progress: int = 0
     message: str = "Queued"
@@ -125,7 +126,7 @@ class ScannerJobManager:
         self._jobs: dict[str, ScanJob] = {}
         self._lock = threading.Lock()
 
-    def start_scan(self, scan_date: str | None = None, force_refresh: bool = False) -> ScanJob:
+    def start_scan(self, scan_date: str | None = None, force_refresh: bool = False, user_email: str | None = None) -> ScanJob:
         with self._lock:
             for job in self._jobs.values():
                 if job.status in {"queued", "running"}:
@@ -137,7 +138,7 @@ class ScannerJobManager:
                 command.extend(["--date", scan_date])
             if force_refresh:
                 command.append("--force-refresh")
-            job = ScanJob(id=job_id, command=command)
+            job = ScanJob(id=job_id, command=command, user_email=user_email)
             self._jobs[job_id] = job
 
         thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
@@ -152,7 +153,7 @@ class ScannerJobManager:
 
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
-        settings = app_settings()
+        settings = app_settings(job.user_email)
         env["LLM_VALIDATION_LIMIT"] = str(settings["llm_validation_limit"])
         env["REPORT_INCLUDE_WEAK"] = "true" if settings["report_include_weak"] else "false"
         env["TRADINGVIEW_CHART_ID"] = settings["tradingview_chart_id"]

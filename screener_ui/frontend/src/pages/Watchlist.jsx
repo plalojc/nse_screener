@@ -4,7 +4,8 @@ import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
 import { Toast } from "../components/Toast.jsx";
-import { useLoad } from "../hooks/useLoad.js";
+import { useAppData } from "../context/AppDataContext.jsx";
+import { useCachedLoad } from "../hooks/useCachedLoad.js";
 import { money } from "../utils/format.js";
 import { openTradingView } from "../utils/tradingview.js";
 
@@ -27,8 +28,11 @@ function gainLossText(item) {
 }
 
 export function Watchlist() {
-  const { data, error, refresh } = useLoad(() => api("/api/watchlist"), []);
-  const { data: settings } = useLoad(() => api("/api/settings"), []);
+  const watchlistLoader = () => api("/api/watchlist");
+  const settingsLoader = () => api("/api/settings");
+  const { refreshKey } = useAppData();
+  const { data, error, refresh } = useCachedLoad("watchlist", watchlistLoader, []);
+  const { data: settings } = useCachedLoad("settings", settingsLoader, []);
   const [form, setForm] = useState({ symbol: "", target_price: "", notes: "" });
   const [edits, setEdits] = useState({});
   const [editingId, setEditingId] = useState(null);
@@ -57,7 +61,8 @@ export function Watchlist() {
     });
     setForm({ symbol: "", target_price: "", notes: "" });
     setMessage(saved.created === false ? `${saved.symbol} already exists in Watchlist.` : "Watchlist item added.");
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   async function saveRow(item) {
@@ -107,14 +112,16 @@ export function Watchlist() {
   async function remove(id) {
     await api(`/api/watchlist/${id}`, { method: "DELETE" });
     setMessage("Watchlist item removed.");
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   async function clearAll() {
     if (!window.confirm("Clear all watchlist items?")) return;
     await api("/api/watchlist", { method: "DELETE" });
     setMessage("Watchlist cleared.");
-    refresh();
+    await refresh();
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   function startHolding(item) {
@@ -142,6 +149,8 @@ export function Watchlist() {
     });
     setMessage(`${holdingDraft.symbol} added to Holdings.`);
     setHoldingDraft(null);
+    refreshKey("holdings", () => api("/api/holdings")).catch(() => {});
+    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
   }
 
   const editingItem = (data || []).find((item) => item.id === editingId);
@@ -289,6 +298,34 @@ export function Watchlist() {
               </button>
             </div>
             <div className="modalFormGrid">
+              <div className="modalReadOnlyGrid modalWide">
+                <div className="modalReadOnlyItem">
+                  <span>Symbol</span>
+                  <strong>{editingItem.symbol}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Added Price</span>
+                  <strong>{money(editingItem.added_price)}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Latest Price</span>
+                  <strong>{money(editingItem.current_price)}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Gain/Loss</span>
+                  <strong className={(editingItem.profit_loss || 0) >= 0 ? "gain" : "loss"}>
+                    {gainLossText(editingItem)}
+                  </strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Created</span>
+                  <strong>{editingItem.created_at || "-"}</strong>
+                </div>
+                <div className="modalReadOnlyItem">
+                  <span>Price Date</span>
+                  <strong>{editingItem.price_date || "-"}</strong>
+                </div>
+              </div>
               <label>
                 Target price
                 <input

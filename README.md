@@ -126,28 +126,20 @@ Bhavcopy prices. The Settings page controls the TradingView chart id, LLM
 validation limit, and whether WEAK verdicts appear in reports.
 
 ```powershell
-.\venv\Scripts\pip.exe install -r screener_ui\backend\requirements.txt
-.\run_backend.ps1
+.\venv\Scripts\pip.exe install -r requirements.txt
+.\run_screener.bat start
 ```
 
-Open `http://127.0.0.1:8787` after building the frontend. For local frontend
-development, run `.\run_ui.ps1` from `screener_ui`. Use root
-`.\stop_backend.ps1` to stop the backend and `screener_ui\stop_ui.ps1` to stop
-the UI dev server.
+Open `http://127.0.0.1:8787`. The combined launcher builds the React frontend
+and starts FastAPI as the single backend + UI process.
 
-Backend scripts are at the project root:
+Combined launcher commands:
 
 ```powershell
-.\run_backend.ps1
-.\stop_backend.ps1
-```
-
-UI scripts are inside `screener_ui`:
-
-```powershell
-cd screener_ui
-.\run_ui.ps1
-.\stop_ui.ps1
+.\run_screener.bat start
+.\run_screener.bat stop
+.\run_screener.bat restart
+.\run_screener.bat status
 ```
 
 ## Flow
