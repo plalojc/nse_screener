@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Download, KeyRound, Save } from "lucide-react";
-import { api, backupDownloadUrl } from "../api.js";
+import { api, downloadFile } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
 import { useAppData } from "../context/AppDataContext.jsx";
@@ -11,6 +11,7 @@ export function Settings() {
   const { setCachedData } = useAppData();
   const { data, error, refresh } = useCachedLoad("settings", settingsLoader, []);
   const [message, setMessage] = useState("");
+  const [backupBusy, setBackupBusy] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ current_password: "", new_password: "" });
   const [form, setForm] = useState({
     tradingview_chart_id: "IMppZ0T",
@@ -53,6 +54,19 @@ export function Settings() {
     });
     setPasswordForm({ current_password: "", new_password: "" });
     setMessage("Password changed.");
+  }
+
+  async function downloadBackup() {
+    setBackupBusy(true);
+    setMessage("");
+    try {
+      await downloadFile("/api/backup", "nse-screener-backup.zip");
+      setMessage("Backup download started.");
+    } catch (err) {
+      setMessage(err.message || "Backup download failed.");
+    } finally {
+      setBackupBusy(false);
+    }
   }
 
   return (
@@ -103,11 +117,11 @@ export function Settings() {
           <div className="settingsBackup">
             <div>
               <h2>Backup</h2>
-              <p>Download a zip backup of the local SQLite data and user file.</p>
+              <p>Download an admin backup of the screener database.</p>
             </div>
-            <a className="downloadBtn" href={backupDownloadUrl()}>
-              <Download size={16} />Download Backup
-            </a>
+            <button className="downloadBtn" type="button" onClick={downloadBackup} disabled={backupBusy}>
+              <Download size={16} />{backupBusy ? "Downloading..." : "Download Backup"}
+            </button>
           </div>
         </div>
       )}

@@ -5,17 +5,20 @@ import subprocess
 import tempfile
 import zipfile
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 import os
 import shutil
+import json
+from datetime import date
 from typing import Iterable
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 
 from config import DATABASE_URL, DB_PATH, NSE_BHAVCOPY_DB_PATH
-from data.db_backend import is_postgres
-from ..auth import USERS_FILE, verify_token
+from data.db_backend import connect, execute, is_postgres
+from ..auth import CurrentUser, USERS_FILE, require_admin
 from ..settings import AGENT_ROOT, UI_DB_PATH
 
 
@@ -48,12 +51,60 @@ def _pg_dump_path() -> str:
     )
 
 
+def _json_safe(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _postgres_json_backup(timestamp: str, temp_dir: Path) -> FileResponse:
+    zip_path = temp_dir / f"nse-screener-postgres-json-{timestamp}.zip"
+    with connect() as conn, zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as backup_zip:
+        tables = execute(conn, """
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_type='BASE TABLE'
+              AND table_schema NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY table_schema, table_name
+        """).fetchall()
+        manifest = {
+            "format": "postgres-json",
+            "created_at": datetime.now().isoformat(),
+            "tables": [],
+        }
+        for table in tables:
+            schema = str(table["table_schema"])
+            table_name = str(table["table_name"])
+            qualified = f"{_quote_identifier(schema)}.{_quote_identifier(table_name)}"
+            rows = execute(conn, f"SELECT * FROM {qualified}").fetchall()
+            payload = [{key: _json_safe(value) for key, value in dict(row).items()} for row in rows]
+            archive_name = f"{schema}/{table_name}.json"
+            manifest["tables"].append({"schema": schema, "table": table_name, "rows": len(payload), "file": archive_name})
+            backup_zip.writestr(archive_name, json.dumps(payload, indent=2, ensure_ascii=False))
+        backup_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=zip_path.name,
+    )
+
+
 def _postgres_backup(timestamp: str, temp_dir: Path) -> FileResponse:
     if not DATABASE_URL:
         raise HTTPException(status_code=500, detail="DATABASE_URL is not configured.")
+    try:
+        pg_dump = _pg_dump_path()
+    except HTTPException:
+        return _postgres_json_backup(timestamp, temp_dir)
     dump_path = temp_dir / f"nse-screener-postgres-{timestamp}.dump"
     result = subprocess.run(
-        [_pg_dump_path(), "--format=custom", "--no-owner", "--no-acl", f"--file={dump_path}", DATABASE_URL],
+        [pg_dump, "--format=custom", "--no-owner", "--no-acl", f"--file={dump_path}", DATABASE_URL],
         capture_output=True,
         text=True,
         timeout=180,
@@ -69,10 +120,7 @@ def _postgres_backup(timestamp: str, temp_dir: Path) -> FileResponse:
 
 
 @router.get("")
-def download_backup(token: str | None = Query(default=None)) -> FileResponse:
-    admin = verify_token(token or "", "access")
-    if not admin.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+def download_backup(admin: CurrentUser = Depends(require_admin)) -> FileResponse:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     temp_dir = Path(tempfile.mkdtemp(prefix="nse-screener-backup-"))
     if is_postgres():
