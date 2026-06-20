@@ -31,14 +31,14 @@ from analysis.catalyst_news import (
 from analysis.technical import add_indicators
 from analysis.grok_validator import validate_signals_grok_batch
 from agent.portfolio_tracker   import check_exit_signals
-from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
+from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATION_LIMIT,
                     ENABLE_CATALYST_NEWS,
                     SCAN_SIGNAL_TYPES,
                     MAX_OPEN_POSITIONS, PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     ATR_SL_MULTIPLIER, TOP_PICKS_COUNT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
                     TOP_PICKS_RSI_MAX,
-                    GEMINI_VALIDATOR_MODEL, GROK_VALIDATOR_MODEL,
+                    GROK_VALIDATOR_MODEL,
                     MAX_CATALYST_CANDIDATES)
 
 init(autoreset=True)
@@ -53,7 +53,7 @@ def _elapsed(start: float) -> str:
 
 
 def _validator_name() -> str:
-    return "Grok" if LLM_VALIDATOR == "grok" else "Gemini"
+    return "Grok"
 
 
 def _rank_signal(sig: dict) -> tuple:
@@ -430,24 +430,13 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             + f"({limit_text} unique stocks by local rank)"
         )
 
-        if LLM_VALIDATOR == "grok":
-            print(Fore.YELLOW + f"\n[4/5] Grok batch validation ({len(llm_candidates)} signal(s))...")
-            print(Fore.CYAN + f"      Model  : {GROK_VALIDATOR_MODEL}")
-            print(Fore.CYAN + "      Source : Grok web/X-aware batch analysis")
-            phase_started = time.perf_counter()
-            _flow(f"Phase llm-validation started | provider=grok candidates={len(llm_candidates)}")
-            validate_signals_grok_batch(llm_candidates, scan_date=target_date)
-            _flow(f"Phase llm-validation completed in {_elapsed(phase_started)}")
-        else:
-            from analysis.gemini_validator import validate_signals_gemini_direct
-
-            print(Fore.YELLOW + f"\n[4/5] Gemini validation ({len(llm_candidates)} signal(s))...")
-            print(Fore.CYAN + f"      Model  : {GEMINI_VALIDATOR_MODEL}")
-            print(Fore.CYAN + "      Source : Gemini + Google Search grounding")
-            phase_started = time.perf_counter()
-            _flow(f"Phase llm-validation started | provider=gemini candidates={len(llm_candidates)}")
-            validate_signals_gemini_direct(llm_candidates, scan_date=target_date)
-            _flow(f"Phase llm-validation completed in {_elapsed(phase_started)}")
+        print(Fore.YELLOW + f"\n[4/5] Grok batch validation ({len(llm_candidates)} signal(s))...")
+        print(Fore.CYAN + f"      Model  : {GROK_VALIDATOR_MODEL}")
+        print(Fore.CYAN + "      Source : Grok web/X-aware batch analysis")
+        phase_started = time.perf_counter()
+        _flow(f"Phase llm-validation started | provider=grok candidates={len(llm_candidates)}")
+        validate_signals_grok_batch(llm_candidates, scan_date=target_date)
+        _flow(f"Phase llm-validation completed in {_elapsed(phase_started)}")
 
         phase_started = time.perf_counter()
         _flow(f"Phase save-breakout-log started | rows={len(signals)}")

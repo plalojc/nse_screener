@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { Metric } from "../components/Metric.jsx";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { DbRefreshButton } from "../components/RefreshButton.jsx";
 import { profitLossCacheKey, useAppData } from "../context/AppDataContext.jsx";
 import { money, number } from "../utils/format.js";
 
@@ -44,7 +45,7 @@ export function ProfitLossReport() {
   const [deleteRow, setDeleteRow] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { bootstrapped, cache, loadKey, refreshKey } = useAppData();
+  const { bootstrapped, cache, loadKey, refreshKey, setCachedData } = useAppData();
   const data = cache[cacheKey]?.data || null;
 
   async function loadReport(event) {
@@ -75,8 +76,24 @@ export function ProfitLossReport() {
     setError("");
     try {
       await api(`/api/profit-loss/${deleteRow.id}`, { method: "DELETE" });
+      const nextRows = rows.filter((row) => row.id !== deleteRow.id);
+      const nextSummary = nextRows.reduce((acc, row) => ({
+        total_buy_amount: acc.total_buy_amount + Number(row.buy_amount || 0),
+        total_sell_amount: acc.total_sell_amount + Number(row.sell_amount || 0),
+        profit_loss: acc.profit_loss + Number(row.profit_loss || 0),
+      }), { total_buy_amount: 0, total_sell_amount: 0, profit_loss: 0 });
+      setCachedData(cacheKey, {
+        ...(data || {}),
+        rows: nextRows,
+        summary: {
+          total_buy_amount: Math.round(nextSummary.total_buy_amount * 100) / 100,
+          total_sell_amount: Math.round(nextSummary.total_sell_amount * 100) / 100,
+          profit_loss: Math.round(nextSummary.profit_loss * 100) / 100,
+          sell_count: nextRows.length,
+        }
+      });
       setDeleteRow(null);
-      await refreshKey(cacheKey, () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`));
+      refreshKey(cacheKey, () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`)).catch(() => {});
     } catch (err) {
       setError(err.message || "Unable to delete P/L row");
     } finally {
@@ -90,7 +107,21 @@ export function ProfitLossReport() {
 
   return (
     <section>
-      <PageTitle title="P/L Report" />
+      <PageTitle
+        title="P/L Report"
+        action={
+          <DbRefreshButton
+            cacheKey={() => profitLossCacheKey(fromDate, toDate)}
+            endpoint={() => `/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`}
+            disabled={loading}
+            beforeRefresh={() => {
+              setError("");
+              setCacheKey(profitLossCacheKey(fromDate, toDate));
+            }}
+            onError={(err) => setError(err.message || "Unable to refresh P/L report")}
+          />
+        }
+      />
       {error && <Notice tone="danger">{error}</Notice>}
       <div className="panel">
         <form className="plFilterForm" onSubmit={loadReport}>

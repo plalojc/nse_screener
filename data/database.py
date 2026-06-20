@@ -332,7 +332,7 @@ def _breakout_log_row(scan_date: str, sig: dict) -> tuple:
         sig.get("llm_verdict", "SKIPPED"),
         sig.get("llm_confidence"),
         sig.get("llm_reasoning"),
-        sig.get("panel_method", "GEMINI_DIRECT"),
+        sig.get("panel_method", "GROK_BATCH"),
         sig.get("llm_model"),
         sig.get("vcp_detected"),
         sig.get("bull_flag_detected"),
@@ -447,7 +447,7 @@ def save_breakout_logs(scan_date: str, signals: list[dict]) -> int:
             INSERT INTO {T_LLM_EVALUATIONS}
                 (scan_date, symbol, panel_method, llm_model, verdict,
                  confidence, reasoning, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(scan_date, symbol, panel_method, llm_model) DO UPDATE SET
                 verdict=excluded.verdict,
                 confidence=excluded.confidence,
@@ -500,7 +500,7 @@ def save_catalyst_events(events: list[dict]) -> int:
             theme=excluded.theme,
             mapping_source=excluded.mapping_source,
             raw_payload=excluded.raw_payload,
-            fetched_at=datetime('now')
+            fetched_at=CURRENT_TIMESTAMP
     """, rows)
     conn.commit()
     if is_postgres():

@@ -28,14 +28,16 @@ button {
   color: white;
   cursor: pointer;
   display: inline-flex;
+  flex: 0 1 auto;
   gap: 8px;
   justify-content: center;
+  line-height: 1.2;
   max-width: 100%;
   min-height: 36px;
   min-width: 0;
   padding: 8px 12px;
   text-align: center;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 button:disabled {
@@ -236,6 +238,18 @@ select:focus {
   margin: 0;
 }
 
+.titleActions {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pageRefreshBtn {
+  background: #1f6f54;
+}
+
 .metricGrid {
   display: grid;
   gap: 12px;
@@ -342,6 +356,7 @@ select:focus {
 .panelHeader {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
   margin-bottom: 14px;
@@ -350,6 +365,11 @@ select:focus {
 .panelHeader h2 {
   font-size: 18px;
   margin: 0;
+}
+
+.panelHeader button {
+  flex: 0 0 auto;
+  width: auto;
 }
 
 .formGrid,
@@ -923,12 +943,25 @@ th {
 
 .watchlistTable th:nth-child(8),
 .watchlistTable td:nth-child(8) {
-  width: 128px;
+  width: 112px;
 }
 
 .watchlistTable th:nth-child(9),
 .watchlistTable td:nth-child(9) {
-  width: 76px;
+  width: 88px;
+}
+
+.watchlistTable th:nth-child(7),
+.watchlistTable td:nth-child(7) {
+  max-width: 170px;
+  width: 170px;
+}
+
+.watchlistTable td:nth-child(7),
+.holdingsTable td:nth-child(10) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .watchlistTable tbody tr:nth-child(even),
@@ -1035,11 +1068,21 @@ tr:hover .hoverActionCell .slAddBtn {
 
 .watchlistTable .rowActions {
   justify-content: center;
+  flex-wrap: nowrap;
 }
 
 .watchlistTable .rowActions button {
   flex: 0 0 auto;
   width: auto;
+}
+
+.watchlistTable .iconActionBtn,
+.watchlistTable .iconDanger {
+  height: 28px;
+  min-height: 28px;
+  min-width: 30px;
+  padding: 4px;
+  width: 30px;
 }
 
 .smallBtn {
@@ -1303,21 +1346,31 @@ tr:hover .hoverActionCell .slAddBtn {
 
   .twoCol,
   .metricGrid,
-  .inlineForm,
-  .holdingForm,
   .plFilterForm,
-  .sellForm,
   .modalFormGrid,
   .reportToolbar,
   .settingsForm {
     grid-template-columns: 1fr;
   }
 
+  .inlineForm {
+    grid-template-columns: minmax(120px, 160px) minmax(120px, 160px) minmax(180px, 1fr) auto;
+  }
+
+  .holdingForm {
+    grid-template-columns: minmax(110px, 140px) minmax(130px, 160px) minmax(90px, 120px) minmax(105px, 130px) minmax(180px, 1fr) auto;
+  }
+
+  .sellForm {
+    grid-template-columns: minmax(130px, 160px) minmax(90px, 130px) minmax(100px, 130px) minmax(160px, 1fr) auto auto;
+  }
+
   .inlineForm button,
   .holdingForm button,
   .sellForm button {
     justify-content: center;
-    width: 100%;
+    justify-self: end;
+    width: auto;
   }
 
   .reportsPage {
@@ -1398,6 +1451,27 @@ tr:hover .hoverActionCell .slAddBtn {
     padding: 6px 10px;
   }
 
+  .titleActions {
+    gap: 6px;
+  }
+
+  .titleActions button,
+  .pageTitle .pageRefreshBtn {
+    flex: 0 0 auto;
+    max-width: none;
+  }
+
+  .panelHeader {
+    gap: 8px;
+  }
+
+  .panelHeader button,
+  .pageTitle button {
+    flex: 0 0 auto;
+    font-size: 13px;
+    max-width: 48%;
+  }
+
   .brand {
     align-items: center;
     gap: 8px;
@@ -1472,6 +1546,51 @@ tr:hover .hoverActionCell .slAddBtn {
 
   .panel {
     padding: 12px;
+  }
+
+  .formGrid {
+    align-items: end;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .formGrid .checkLine {
+    justify-content: flex-start;
+    min-width: max-content;
+  }
+
+  .inlineForm {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .inlineForm input:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .inlineForm button {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .holdingForm {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .holdingForm input:nth-child(5) {
+    grid-column: 1 / -1;
+  }
+
+  .holdingForm button {
+    grid-column: 2;
+    justify-self: end;
+  }
+
+  .inlineForm button,
+  .holdingForm button,
+  .sellForm button {
+    font-size: 13px;
+    min-height: 34px;
+    padding: 6px 10px;
+    width: auto;
   }
 
   .reportToolbar {
@@ -1616,25 +1735,34 @@ tr:hover .hoverActionCell .slAddBtn {
   .watchlistTable td:nth-child(9),
   .holdingsTable th:nth-child(11),
   .holdingsTable td:nth-child(11) {
-    width: 70px;
+    width: 54px;
   }
 
   .watchlistTable .rowActions,
   .holdingsTable .rowActions {
     gap: 4px;
     justify-content: center;
+    flex-wrap: nowrap;
   }
 
   .watchlistTable .rowActions button,
   .holdingsTable .rowActions button {
     min-height: 24px;
     min-width: 24px;
-    padding: 3px 5px;
+    padding: 3px;
   }
 
-  .holdingsTable .rowActions .smallBtn {
+  .holdingsTable .rowActions .smallBtn,
+  .watchlistTable .rowActions .iconActionBtn,
+  .watchlistTable .rowActions .iconDanger {
     font-size: 0;
     min-width: 24px;
+    width: 24px;
+  }
+
+  .holdingsTable .rowActions .sellBtn {
+    min-width: 24px;
+    width: 24px;
   }
 
   .holdingsTable .rowActions .smallBtn svg {
@@ -1653,26 +1781,36 @@ tr:hover .hoverActionCell .slAddBtn {
   }
 
   .plTable {
-    min-width: 0;
-    table-layout: fixed;
+    border: 0;
+    box-shadow: none;
+    display: block;
     width: 100%;
   }
 
-  .plTable th,
-  .plTable td {
-    display: table-cell;
-    font-size: 9.5px;
-    line-height: 1.15;
-    overflow: hidden;
-    padding: 3px 3px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .plTable thead {
+    display: none;
   }
 
+  .plTable tbody {
+    display: grid;
+    gap: 8px;
+  }
+
+  .plTable tbody tr {
+    background: white;
+    border: 1px solid #d7dde5;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plTable th:nth-child(1),
+  .plTable td:nth-child(1),
   .plTable th:nth-child(4),
   .plTable td:nth-child(4),
   .plTable th:nth-child(5),
   .plTable td:nth-child(5),
+  .plTable th:nth-child(6),
+  .plTable td:nth-child(6),
   .plTable th:nth-child(7),
   .plTable td:nth-child(7),
   .plTable th:nth-child(8),
@@ -1680,31 +1818,61 @@ tr:hover .hoverActionCell .slAddBtn {
     display: none;
   }
 
-  .plTable th:nth-child(1),
-  .plTable td:nth-child(1) {
-    width: 24px;
+  .plTable tbody td {
+    align-items: center;
+    border: 0;
+    display: flex;
+    font-size: 11px;
+    gap: 8px;
+    justify-content: space-between;
+    line-height: 1.2;
+    min-width: 0;
+    overflow: visible;
+    padding: 7px 8px;
+    text-overflow: clip;
+    white-space: normal;
+    width: auto !important;
   }
 
-  .plTable th:nth-child(2),
-  .plTable td:nth-child(2) {
-    width: 25%;
+  .plTable tbody td::before {
+    color: #66758a;
+    content: "";
+    flex: 0 0 auto;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
 
-  .plTable th:nth-child(3),
-  .plTable td:nth-child(3) {
-    width: 42px;
+  .plTable tbody td:nth-child(2)::before {
+    content: "Symbol";
   }
 
-  .plTable th:nth-child(6),
-  .plTable td:nth-child(6),
-  .plTable th:nth-child(9),
-  .plTable td:nth-child(9) {
-    width: 21%;
+  .plTable tbody td:nth-child(3)::before {
+    content: "Qty";
   }
 
-  .plTable th:nth-child(10),
-  .plTable td:nth-child(10) {
-    width: 76px;
+  .plTable tbody td:nth-child(9)::before {
+    content: "Sell";
+  }
+
+  .plTable tbody td:nth-child(10)::before {
+    content: "P/L";
+  }
+
+  .plTable tbody td:nth-child(2) {
+    background: #f8fbff;
+    grid-column: 1 / -1;
+  }
+
+  .plTable tbody td[colspan] {
+    display: block !important;
+    grid-column: 1 / -1;
+    padding: 10px;
+  }
+
+  .plTable tbody td[colspan]::before {
+    display: none;
   }
 
   .plTable tfoot {
@@ -1713,25 +1881,24 @@ tr:hover .hoverActionCell .slAddBtn {
 
   .plTable .pnlCell {
     gap: 2px;
+    justify-content: flex-end;
   }
 
   .plTable .pnlText {
+    justify-content: flex-end;
     min-width: 0;
   }
 
   .plTable .pnlAmount,
   .plTable .pnlPct {
-    font-size: 9.5px;
+    font-size: 11px;
   }
 
   .plTable .plDeleteBtn {
+    opacity: 1;
     min-height: 20px;
     padding: 2px;
-  }
-
-  .plTable th:nth-child(10),
-  .plTable td:nth-child(10) {
-    width: 128px;
+    pointer-events: auto;
   }
 
   .pnlCell {
@@ -1752,11 +1919,15 @@ tr:hover .hoverActionCell .slAddBtn {
     padding: 12px;
   }
 
-  .holdingEditModal .modalFormGrid {
+  .holdingEditModal .modalFormGrid,
+  .addHoldingModal .modalFormGrid,
+  .sellHoldingModal .modalFormGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .holdingEditModal .modalWide {
+  .holdingEditModal .modalWide,
+  .addHoldingModal .modalWide,
+  .sellHoldingModal .modalWide {
     grid-column: 1 / -1;
   }
 
@@ -1786,20 +1957,21 @@ tr:hover .hoverActionCell .slAddBtn {
     justify-content: flex-start;
   }
 
-  .holdingEditModal .modalActions {
+  .holdingEditModal .modalActions,
+  .addHoldingModal .modalActions,
+  .sellHoldingModal .modalActions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .holdingEditModal .modalActions button {
+  .holdingEditModal .modalActions button,
+  .addHoldingModal .modalActions button,
+  .sellHoldingModal .modalActions button {
     justify-content: center;
     width: 100%;
   }
 
-  .modalActions button,
-  .inlineForm button,
-  .holdingForm button,
-  .sellForm button {
+  .modalActions button {
     width: 100%;
   }
 

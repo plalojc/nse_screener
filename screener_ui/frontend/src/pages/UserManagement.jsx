@@ -4,10 +4,12 @@ import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
 import { Toast } from "../components/Toast.jsx";
+import { useAppData } from "../context/AppDataContext.jsx";
 import { useCachedLoad } from "../hooks/useCachedLoad.js";
 
 export function UserManagement() {
   const usersLoader = () => api("/api/auth/users");
+  const { cache, setCachedData } = useAppData();
   const { data, error, refresh } = useCachedLoad("users", usersLoader, []);
   const [form, setForm] = useState({ email: "", password: "" });
   const [passwords, setPasswords] = useState({});
@@ -37,9 +39,11 @@ export function UserManagement() {
         method: "POST",
         body: JSON.stringify({ email, password })
       });
+      const current = Array.isArray(cache.users?.data) ? cache.users.data : [];
+      setCachedData("users", [user, ...current.filter((item) => item.email !== user.email)]);
       setForm({ email: "", password: "" });
       setMessage(`${user.email} added.`);
-      refresh();
+      refresh().catch(() => {});
     } catch (err) {
       setActionError(err.message || "Could not add user.");
     } finally {
@@ -54,8 +58,10 @@ export function UserManagement() {
     setActionError("");
     try {
       await api(`/api/auth/users/${encodeURIComponent(email)}`, { method: "DELETE" });
+      const current = Array.isArray(cache.users?.data) ? cache.users.data : [];
+      setCachedData("users", current.filter((user) => user.email !== email));
       setMessage(`${email} deleted.`);
-      refresh();
+      refresh().catch(() => {});
     } catch (err) {
       setActionError(err.message || "Could not delete user.");
     } finally {
@@ -73,8 +79,10 @@ export function UserManagement() {
         method: "PUT",
         body: JSON.stringify({ disabled })
       });
+      const current = Array.isArray(cache.users?.data) ? cache.users.data : [];
+      setCachedData("users", current.map((item) => (item.email === user.email ? { ...item, disabled } : item)));
       setMessage(`${user.email} ${disabled ? "disabled" : "enabled"}.`);
-      refresh();
+      refresh().catch(() => {});
     } catch (err) {
       setActionError(err.message || "Could not update user.");
     } finally {

@@ -38,7 +38,6 @@ STEP_PROGRESS = {
     "loading ohlcv": 45,
     "llm gate": 66,
     "grok batch": 74,
-    "gemini validation": 74,
     "results": 90,
     "html report saved": 98,
 }
@@ -128,8 +127,6 @@ def public_message(line: str, fallback: str) -> str:
         return "Selecting top-ranked stocks for AI review..."
     if "grok" in lowered:
         return "AI review is checking the selected stocks..."
-    if "gemini" in lowered:
-        return "AI review is checking the selected stocks..."
     if "phase ohlcv-bulk-load started" in lowered:
         return "Loading one-year price history from database..."
     if "phase ohlcv-bulk-load completed" in lowered:
@@ -208,12 +205,6 @@ def infer_progress(line: str, current: int) -> int:
         batch = int(grok_match.group(1))
         total = int(grok_match.group(2) or batch)
         return min(88, 74 + int((batch / max(1, total)) * 14))
-
-    gemini_match = re.search(r"gemini\s+(\d+)\s*/\s*(\d+)", lowered)
-    if gemini_match:
-        done = int(gemini_match.group(1))
-        total = int(gemini_match.group(2))
-        return min(88, 74 + int((done / max(1, total)) * 14))
 
     match = re.search(r"\[(\s*\d+)/(\d+)\]", line)
     if match:

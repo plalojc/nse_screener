@@ -1,7 +1,7 @@
 """
 report/html_report_writer.py
 ============================
-Writes the final list of qualifying signals to an HTML report file.
+Renders the final list of qualifying signals to HTML.
 
 Sorted by score descending (highest-conviction first).
 
@@ -26,7 +26,6 @@ import os
 from datetime import date
 from html import escape
 from io import StringIO
-from pathlib import Path
 
 from config import (
     REPORT_INCLUDE_REJECTED,
@@ -69,6 +68,7 @@ _PAGE_HEAD = """\
         td.slCell {{ min-width:48px; position:relative; width:52px; }}
         .slNo {{ display:inline-block; }}
         .watch-btn {{ align-items:center; background:#1f6f54; border:1px solid #145c42; border-radius:50%; color:white; cursor:pointer; display:none; font-size:16px; font-weight:700; height:24px; justify-content:center; left:50%; line-height:20px; padding:0; position:absolute; top:50%; transform:translate(-50%,-50%); width:24px; }}
+        .watch-btn:disabled {{ cursor:wait; opacity:.7; }}
         tr:hover .slCell .slNo {{ display:none; }}
         tr:hover .slCell .watch-btn {{ display:inline-flex; }}
         .watch-btn.added {{ background:#145c42; font-size:11px; width:42px; border-radius:12px; }}
@@ -147,6 +147,12 @@ _PAGE_HEAD = """\
             activeNewsModal = null;
         }}
         async function addToWatchlist(symbol, button) {{
+            if (button.disabled) {{
+                return;
+            }}
+            var originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = "...";
             try {{
                 var token = new URLSearchParams(window.location.search).get("token") || "";
                 var response = await fetch("/api/watchlist", {{
@@ -162,10 +168,28 @@ _PAGE_HEAD = """\
                     }})
                 }});
                 var payload = await response.json();
+                if (!response.ok) {{
+                    throw new Error(payload && payload.detail ? payload.detail : "Watchlist add failed");
+                }}
                 button.classList.add("added");
                 button.textContent = payload && payload.created === false ? "Exists" : "Added";
+                try {{
+                    if (window.parent && window.parent !== window) {{
+                        window.parent.postMessage({{
+                            type: "nse-screener:watchlist-updated",
+                            payload: payload
+                        }}, "*");
+                    }}
+                }} catch (notifyErr) {{
+                    // The stock is already saved; parent refresh is best-effort.
+                }}
             }} catch (err) {{
                 button.textContent = "Failed";
+            }} finally {{
+                button.disabled = false;
+                if (button.textContent === "...") {{
+                    button.textContent = originalText || "+";
+                }}
             }}
         }}
     </script>
@@ -450,11 +474,3 @@ def render(
     return fh.getvalue()
 
 
-def write(signals: list[dict], output_dir: str, scan_date: str | None = None) -> Path:
-    """Render signals to an HTML file. Kept for manual/export use only."""
-    report_date = scan_date or str(date.today())
-    out_path = Path(output_dir) / f"NSE-Breakout-{report_date}.html"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(render(signals, report_date), encoding="utf-8")
-
-    return out_path

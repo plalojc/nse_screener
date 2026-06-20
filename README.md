@@ -26,7 +26,6 @@ nse_breakout_agent/
 |   |-- pattern_scanner.py
 |   |-- catalyst_news.py
 |   |-- theme_mapper.py
-|   |-- gemini_validator.py
 |   |-- grok_validator.py
 |   |-- backtester.py
 |-- data/
@@ -48,7 +47,6 @@ copy env.example .env
 Edit `.env` and set:
 
 ```env
-LLM_VALIDATOR=grok
 XAI_API_KEY=...
 LLM_VALIDATION_LIMIT=100
 ```

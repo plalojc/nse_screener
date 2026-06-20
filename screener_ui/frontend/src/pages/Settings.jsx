@@ -3,10 +3,12 @@ import { Download, KeyRound, Save } from "lucide-react";
 import { api, backupDownloadUrl } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { useAppData } from "../context/AppDataContext.jsx";
 import { useCachedLoad } from "../hooks/useCachedLoad.js";
 
 export function Settings() {
   const settingsLoader = () => api("/api/settings");
+  const { setCachedData } = useAppData();
   const { data, error, refresh } = useCachedLoad("settings", settingsLoader, []);
   const [message, setMessage] = useState("");
   const [passwordForm, setPasswordForm] = useState({ current_password: "", new_password: "" });
@@ -38,8 +40,9 @@ export function Settings() {
       })
     });
     setForm(next);
+    setCachedData("settings", next);
     setMessage("Settings saved.");
-    refresh();
+    refresh().catch(() => {});
   }
 
   async function changePassword(event) {

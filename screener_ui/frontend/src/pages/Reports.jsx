@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Download, FileSearch, RefreshCw, Trash2, X } from "lucide-react";
+import { Download, FileSearch, Trash2, X } from "lucide-react";
 import { api, getAccessToken, reportContentUrl, reportDownloadUrl } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { DbRefreshButton } from "../components/RefreshButton.jsx";
+import { Toast } from "../components/Toast.jsx";
 import { useAppData } from "../context/AppDataContext.jsx";
 import { useCachedLoad } from "../hooks/useCachedLoad.js";
 
@@ -12,7 +14,7 @@ function reportHtmlCacheKey(report) {
 
 export function Reports({ user }) {
   const reportsLoader = () => api("/api/reports");
-  const { cache, loadKey, refreshKey } = useAppData();
+  const { cache, loadKey, refreshKey, setCachedData } = useAppData();
   const { data, error, loading, refresh } = useCachedLoad("reports", reportsLoader, []);
   const [selectedDate, setSelectedDate] = useState("");
   const [loadedDate, setLoadedDate] = useState("");
@@ -34,6 +36,7 @@ export function Reports({ user }) {
   async function deleteSelected() {
     if (!deleteTarget) return;
     await api(`/api/reports/${deleteTarget.date}?kind=${deleteTarget.kind}`, { method: "DELETE" });
+    setCachedData("reports", reports.filter((item) => !(item.date === deleteTarget.date && item.kind === deleteTarget.kind)));
     setMessage(`Report ${deleteTarget.date} deleted.`);
     setDeleteTarget(null);
     setSelectedDate("");
@@ -90,14 +93,50 @@ export function Reports({ user }) {
         'new URLSearchParams(window.location.search).get("token") || ""',
         token
       );
-    }).catch(() => {});
+    }, { force: true }).catch(() => {});
   }, [selected?.date, selected?.kind]);
+
+  useEffect(() => {
+    async function handleReportMessage(event) {
+      if (event.origin && event.origin !== "null" && event.origin !== window.location.origin) return;
+      if (event.data?.type !== "nse-screener:watchlist-updated") return;
+
+      const payload = event.data?.payload || {};
+      if (payload.id) {
+        const current = Array.isArray(cache.watchlist?.data) ? cache.watchlist.data : [];
+        setCachedData("watchlist", [payload, ...current.filter((item) => item.id !== payload.id)]);
+      }
+      setMessage(payload.created === false ? "Stock already exists in Watchlist." : "Stock added to Watchlist.");
+      try {
+        const latestWatchlist = await refreshKey("watchlist", () => api("/api/watchlist"));
+        if (Array.isArray(latestWatchlist)) {
+          setCachedData("watchlist", latestWatchlist);
+        }
+      } catch {
+        // The optimistic row above keeps the UI responsive if the refresh fails.
+      }
+      refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+    }
+
+    window.addEventListener("message", handleReportMessage);
+    return () => window.removeEventListener("message", handleReportMessage);
+  }, [cache.watchlist?.data, refreshKey, setCachedData]);
 
   return (
     <section className="reportsPage">
-      <PageTitle title="Reports" action={<button onClick={refresh}><RefreshCw size={16} />Refresh</button>} />
+      <PageTitle
+        title="Reports"
+        action={
+          <DbRefreshButton
+            cacheKey="reports"
+            endpoint="/api/reports"
+            disabled={loading}
+            beforeRefresh={() => setMessage("")}
+          />
+        }
+      />
+      <Toast message={message} onClose={() => setMessage("")} />
       {error && <Notice tone="danger">{error}</Notice>}
-      {message && <Notice>{message}</Notice>}
       <div className="panel reportsPanel">
         <div className="reportToolbar">
           <input

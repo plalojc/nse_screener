@@ -3,9 +3,9 @@ import { Check, Edit3, ExternalLink, Plus, Save, X } from "lucide-react";
 import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
+import { DbRefreshButton } from "../components/RefreshButton.jsx";
 import { Toast } from "../components/Toast.jsx";
-import { useAppData } from "../context/AppDataContext.jsx";
-import { profitLossCacheKey } from "../context/AppDataContext.jsx";
+import { profitLossCacheKey, useAppData } from "../context/AppDataContext.jsx";
 import { useCachedLoad } from "../hooks/useCachedLoad.js";
 import { money, number } from "../utils/format.js";
 import { openTradingView } from "../utils/tradingview.js";
@@ -16,10 +16,16 @@ function todayInputValue() {
   return new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
 }
 
+function shortText(value, max = 28) {
+  const text = String(value || "").trim();
+  if (!text) return "-";
+  return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text;
+}
+
 export function Holdings() {
   const holdingsLoader = () => api("/api/holdings");
   const settingsLoader = () => api("/api/settings");
-  const { refreshKey } = useAppData();
+  const { cache, refreshKey, setCachedData } = useAppData();
   const { data, error, refresh } = useCachedLoad("holdings", holdingsLoader, []);
   const { data: settings } = useCachedLoad("settings", settingsLoader, []);
   const [form, setForm] = useState({
@@ -31,6 +37,7 @@ export function Holdings() {
   });
   const [sellingId, setSellingId] = useState(null);
   const [sellingSymbol, setSellingSymbol] = useState("");
+  const [sellingItem, setSellingItem] = useState(null);
   const [sellForm, setSellForm] = useState({
     sell_date: todayInputValue(),
     quantity: "",
@@ -40,6 +47,7 @@ export function Holdings() {
   const [editingId, setEditingId] = useState(null);
   const [edits, setEdits] = useState({});
   const [message, setMessage] = useState("");
+  const [busyAction, setBusyAction] = useState("");
 
   useEffect(() => {
     const next = {};
@@ -57,18 +65,25 @@ export function Holdings() {
 
   async function save(event) {
     event.preventDefault();
-    await api("/api/holdings", {
-      method: "POST",
-      body: JSON.stringify({
-        ...form,
-        quantity: Number(form.quantity),
-        buy_price: Number(form.buy_price)
-      })
-    });
-    setForm({ ...form, symbol: "", quantity: "", buy_price: "", notes: "" });
-    setMessage("Holding added.");
-    await refresh();
-    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+    setBusyAction("add");
+    try {
+      const saved = await api("/api/holdings", {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          quantity: Number(form.quantity),
+          buy_price: Number(form.buy_price)
+        })
+      });
+      const current = Array.isArray(cache.holdings?.data) ? cache.holdings.data : [];
+      setCachedData("holdings", [saved, ...current.filter((item) => item.id !== saved.id)]);
+      setForm({ ...form, symbol: "", quantity: "", buy_price: "", notes: "" });
+      setMessage("Holding added.");
+      refresh().catch(() => {});
+      refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+    } finally {
+      setBusyAction("");
+    }
   }
 
   function startEdit(item) {
@@ -108,25 +123,34 @@ export function Holdings() {
 
   async function saveEdit(item) {
     const edit = edits[item.id] || {};
-    await api(`/api/holdings/${item.id}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        symbol: edit.symbol || item.symbol,
-        buy_date: edit.buy_date || item.buy_date,
-        quantity: Number(edit.quantity),
-        buy_price: Number(edit.buy_price),
-        notes: edit.notes || ""
-      })
-    });
-    setEditingId(null);
-    setMessage(`${edit.symbol || item.symbol} updated.`);
-    await refresh();
-    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+    const actionKey = `edit:${item.id}`;
+    setBusyAction(actionKey);
+    try {
+      const updated = await api(`/api/holdings/${item.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          symbol: edit.symbol || item.symbol,
+          buy_date: edit.buy_date || item.buy_date,
+          quantity: Number(edit.quantity),
+          buy_price: Number(edit.buy_price),
+          notes: edit.notes || ""
+        })
+      });
+      const current = Array.isArray(cache.holdings?.data) ? cache.holdings.data : [];
+      setCachedData("holdings", current.map((row) => (row.id === item.id ? updated : row)));
+      setEditingId(null);
+      setMessage(`${edit.symbol || item.symbol} updated.`);
+      refresh().catch(() => {});
+      refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+    } finally {
+      setBusyAction("");
+    }
   }
 
   function startSell(item) {
     setSellingId(item.id);
     setSellingSymbol(item.symbol);
+    setSellingItem(item);
     setSellForm({
       sell_date: todayInputValue(),
       quantity: item.quantity || "",
@@ -137,29 +161,52 @@ export function Holdings() {
 
   async function sell(event) {
     event.preventDefault();
-    await api(`/api/holdings/${sellingId}/sell`, {
-      method: "POST",
-      body: JSON.stringify({
-        ...sellForm,
-        quantity: Number(sellForm.quantity),
-        sell_price: Number(sellForm.sell_price)
-      })
-    });
-    setSellingId(null);
-    setSellingSymbol("");
-    setMessage("Holding sale recorded.");
-    await refresh();
-    refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
-    const fromDate = todayInputValue().slice(0, 8) + "01";
-    const toDate = todayInputValue();
-    refreshKey(profitLossCacheKey(fromDate, toDate), () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`)).catch(() => {});
+    setBusyAction("sell");
+    try {
+      const result = await api(`/api/holdings/${sellingId}/sell`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...sellForm,
+          quantity: Number(sellForm.quantity),
+          sell_price: Number(sellForm.sell_price)
+        })
+      });
+      const current = Array.isArray(cache.holdings?.data) ? cache.holdings.data : [];
+      const nextHoldings = result?.holding
+        ? current.map((row) => (row.id === sellingId ? result.holding : row))
+        : current.filter((row) => row.id !== sellingId);
+      setCachedData("holdings", nextHoldings);
+      setSellingId(null);
+      setSellingSymbol("");
+      setSellingItem(null);
+      setMessage("Holding sale recorded.");
+      refresh().catch(() => {});
+      refreshKey("dashboard", () => api("/api/dashboard")).catch(() => {});
+      const fromDate = todayInputValue().slice(0, 8) + "01";
+      const toDate = todayInputValue();
+      refreshKey(profitLossCacheKey(fromDate, toDate), () => api(`/api/profit-loss?from_date=${fromDate}&to_date=${toDate}`)).catch(() => {});
+    } finally {
+      setBusyAction("");
+    }
   }
 
   const editingItem = (data || []).find((item) => item.id === editingId);
 
   return (
     <section>
-      <PageTitle title="Holdings" />
+      <PageTitle
+        title="Holdings"
+        action={
+          <DbRefreshButton
+            cacheKey="holdings"
+            endpoint="/api/holdings"
+            disabled={Boolean(busyAction)}
+            beforeRefresh={() => setMessage("")}
+            onSuccess={() => setMessage("Holdings refreshed.")}
+            onError={(err) => setMessage(err.message || "Unable to refresh Holdings.")}
+          />
+        }
+      />
       {error && <Notice tone="danger">{error}</Notice>}
       <Toast message={message} onClose={() => setMessage("")} />
       <div className="panel">
@@ -169,7 +216,7 @@ export function Holdings() {
           <input placeholder="Quantity" type="number" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required />
           <input placeholder="Buy price" type="number" value={form.buy_price} onChange={(e) => setForm({ ...form, buy_price: e.target.value })} required />
           <input placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-          <button type="submit"><Plus size={16} />Add</button>
+          <button type="submit" disabled={busyAction === "add"}><Plus size={16} />{busyAction === "add" ? "Adding..." : "Add"}</button>
         </form>
 
         <div className="tableWrap">
@@ -211,13 +258,13 @@ export function Holdings() {
                   <td>{money(item.current_price)}</td>
                   <td><span className={(item.profit_loss || 0) >= 0 ? "gain" : "loss"}>{money(item.profit_loss)}</span></td>
                   <td>{item.profit_loss_pct === null || item.profit_loss_pct === undefined ? "-" : `${item.profit_loss_pct}%`}</td>
-                  <td>{item.notes || "-"}</td>
+                  <td title={item.notes || ""}>{shortText(item.notes)}</td>
                   <td>
                     <div className="rowActions">
-                      <button type="button" className="smallBtn actionBtn" onClick={() => startEdit(item)}>
+                      <button type="button" className="smallBtn actionBtn" onClick={() => startEdit(item)} disabled={Boolean(busyAction)}>
                         <Edit3 size={14} />Edit
                       </button>
-                      <button type="button" className="smallBtn sellBtn" onClick={() => startSell(item)}>Sell</button>
+                      <button type="button" className="smallBtn sellBtn" onClick={() => startSell(item)} disabled={Boolean(busyAction)}>Sell</button>
                     </div>
                   </td>
                 </tr>
@@ -229,18 +276,60 @@ export function Holdings() {
         </div>
       </div>
       {sellingId && (
-        <div className="modalOverlay" onClick={() => { setSellingId(null); setSellingSymbol(""); }}>
-          <form className="appModal holdingModal" onSubmit={sell} onClick={(event) => event.stopPropagation()}>
+        <div className="modalOverlay" onClick={() => { setSellingId(null); setSellingSymbol(""); setSellingItem(null); }}>
+          <form className="appModal holdingModal sellHoldingModal" onSubmit={sell} onClick={(event) => event.stopPropagation()}>
             <div className="modalHeader">
               <div>
                 <h2>Sell {sellingSymbol}</h2>
                 <p>Record sell quantity, price, and date for this holding.</p>
               </div>
-              <button type="button" className="modalClose" onClick={() => { setSellingId(null); setSellingSymbol(""); }} title="Close">
+              <button type="button" className="modalClose" onClick={() => { setSellingId(null); setSellingSymbol(""); setSellingItem(null); }} title="Close">
                 <X size={18} />
               </button>
             </div>
             <div className="modalFormGrid">
+              {sellingItem && (
+                <div className="modalReadOnlyGrid modalWide">
+                  <div className="modalReadOnlyItem">
+                    <span>Symbol</span>
+                    <strong>{sellingItem.symbol}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>Buy Date</span>
+                    <strong>{sellingItem.buy_date || "-"}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>Available Qty</span>
+                    <strong>{number(sellingItem.quantity)}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>Buy Price</span>
+                    <strong>{money(sellingItem.buy_price)}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>Invested</span>
+                    <strong>{money(sellingItem.invested_amount)}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>Current / Share</span>
+                    <strong>{money(sellingItem.current_price)}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>Total P/L</span>
+                    <strong className={(sellingItem.profit_loss || 0) >= 0 ? "gain" : "loss"}>
+                      {money(sellingItem.profit_loss)}
+                    </strong>
+                  </div>
+                  <div className="modalReadOnlyItem">
+                    <span>P/L %</span>
+                    <strong>{sellingItem.profit_loss_pct === null || sellingItem.profit_loss_pct === undefined ? "-" : `${sellingItem.profit_loss_pct}%`}</strong>
+                  </div>
+                  <div className="modalReadOnlyItem modalReadOnlyWide">
+                    <span>Holding Notes</span>
+                    <strong>{sellingItem.notes || "-"}</strong>
+                  </div>
+                </div>
+              )}
               <label>
                 Sell date
                 <input type="date" value={sellForm.sell_date} onChange={(e) => setSellForm({ ...sellForm, sell_date: e.target.value })} required />
@@ -259,8 +348,8 @@ export function Holdings() {
               </label>
             </div>
             <div className="modalActions">
-              <button type="submit" className="sellBtn"><Check size={16} />Confirm Sell</button>
-              <button type="button" className="secondaryBtn" onClick={() => { setSellingId(null); setSellingSymbol(""); }}>Cancel</button>
+              <button type="submit" className="sellBtn" disabled={busyAction === "sell"}><Check size={16} />{busyAction === "sell" ? "Selling..." : "Confirm Sell"}</button>
+              <button type="button" className="secondaryBtn" onClick={() => { setSellingId(null); setSellingSymbol(""); setSellingItem(null); }} disabled={busyAction === "sell"}>Cancel</button>
             </div>
           </form>
         </div>
@@ -359,8 +448,8 @@ export function Holdings() {
               </label>
             </div>
             <div className="modalActions">
-              <button type="submit"><Save size={16} />Save</button>
-              <button type="button" className="secondaryBtn" onClick={() => cancelEdit(editingItem)}>Cancel</button>
+              <button type="submit" disabled={busyAction === `edit:${editingItem.id}`}><Save size={16} />{busyAction === `edit:${editingItem.id}` ? "Saving..." : "Save"}</button>
+              <button type="button" className="secondaryBtn" onClick={() => cancelEdit(editingItem)} disabled={busyAction === `edit:${editingItem.id}`}>Cancel</button>
             </div>
           </form>
         </div>

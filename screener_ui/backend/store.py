@@ -180,7 +180,7 @@ def add_watchlist(user_email: str, symbol: str, notes: str = "", target_price: f
             execute(conn, f"""
                 INSERT INTO {T_WATCHLIST}
                     (user_email, symbol, notes, target_price, added_price, added_price_date, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (user_email, symbol, notes.strip(), target_price, added_price, added_price_date))
             row = execute(conn, f"SELECT * FROM {T_WATCHLIST} WHERE user_email=? AND symbol=?", (user_email, symbol)).fetchone()
         conn.commit()
@@ -270,14 +270,14 @@ def add_holding(user_email: str, symbol: str, buy_date: str, quantity: float, bu
             row = execute(conn, f"""
                 INSERT INTO {T_HOLDINGS}
                     (user_email, symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 RETURNING *
             """, (user_email, symbol, buy_date, quantity, buy_price, invested, notes.strip())).fetchone()
         else:
             cur = execute(conn, f"""
                 INSERT INTO {T_HOLDINGS}
                     (user_email, symbol, buy_date, quantity, buy_price, invested_amount, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """, (user_email, symbol, buy_date, quantity, buy_price, invested, notes.strip()))
             row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=?", (cur.lastrowid,)).fetchone()
         conn.commit()
@@ -300,7 +300,7 @@ def update_holding(user_email: str, item_id: int, payload: dict[str, Any]) -> di
             row = execute(conn, f"""
                 UPDATE {T_HOLDINGS}
                 SET symbol=?, buy_date=?, quantity=?, buy_price=?,
-                    invested_amount=?, notes=?, updated_at=datetime('now')
+                    invested_amount=?, notes=?, updated_at=CURRENT_TIMESTAMP
                 WHERE id=? AND user_email=?
                 RETURNING *
             """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id, user_email)).fetchone()
@@ -308,7 +308,7 @@ def update_holding(user_email: str, item_id: int, payload: dict[str, Any]) -> di
             execute(conn, f"""
                 UPDATE {T_HOLDINGS}
                 SET symbol=?, buy_date=?, quantity=?, buy_price=?,
-                    invested_amount=?, notes=?, updated_at=datetime('now')
+                    invested_amount=?, notes=?, updated_at=CURRENT_TIMESTAMP
                 WHERE id=? AND user_email=?
             """, (symbol, buy_date, quantity, buy_price, invested, notes, item_id, user_email))
             row = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email)).fetchone()
@@ -388,7 +388,7 @@ def sell_holding(
             remaining_invested = round(remaining_qty * buy_price, 2)
             execute(conn, f"""
                 UPDATE {T_HOLDINGS}
-                SET quantity=?, invested_amount=?, updated_at=datetime('now')
+                SET quantity=?, invested_amount=?, updated_at=CURRENT_TIMESTAMP
                 WHERE id=? AND user_email=?
             """, (remaining_qty, remaining_invested, item_id, user_email))
             next_holding = execute(conn, f"SELECT * FROM {T_HOLDINGS} WHERE id=? AND user_email=?", (item_id, user_email)).fetchone()
@@ -495,10 +495,10 @@ def set_setting(key: str, value: str, user_email: str | None = None) -> None:
     with _connect() as conn:
         execute(conn, f"""
             INSERT INTO {T_UI_SETTINGS} (key, value, updated_at)
-            VALUES (?, ?, datetime('now'))
+            VALUES (?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(key) DO UPDATE SET
                 value=excluded.value,
-                updated_at=datetime('now')
+                updated_at=CURRENT_TIMESTAMP
         """, (storage_key, value))
         conn.commit()
 

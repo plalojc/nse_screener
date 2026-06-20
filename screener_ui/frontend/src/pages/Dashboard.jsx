@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { CalendarClock, Play, RefreshCw } from "lucide-react";
+import { CalendarClock, Play } from "lucide-react";
 import { API_BASE, api, getAccessToken } from "../api.js";
 import { Metric } from "../components/Metric.jsx";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
 import { Progress } from "../components/Progress.jsx";
+import { DbRefreshButton } from "../components/RefreshButton.jsx";
 import { useAppData } from "../context/AppDataContext.jsx";
 import { useCachedLoad } from "../hooks/useCachedLoad.js";
 import { money } from "../utils/format.js";
@@ -20,10 +21,10 @@ export function Dashboard({ user }) {
   const { refreshKey } = useAppData();
   const { data, error, loading, refresh } = useCachedLoad("dashboard", dashboardLoader, []);
   const [job, setJob] = useState(null);
-  const [lines, setLines] = useState([]);
   const [scanDate, setScanDate] = useState(todayInputValue);
   const [forceRefresh, setForceRefresh] = useState(false);
   const [scheduler, setScheduler] = useState({ enabled: false, time: "08:20" });
+  const [busyAction, setBusyAction] = useState("");
 
   useEffect(() => {
     if (data?.scheduler) setScheduler(data.scheduler);
@@ -41,10 +42,6 @@ export function Dashboard({ user }) {
         refreshKey("reports", () => api("/api/reports")).catch(() => {});
       }
     });
-    source.addEventListener("line", (event) => {
-      const payload = JSON.parse(event.data);
-      setLines((current) => [...current.slice(-399), payload.line]);
-    });
     source.onerror = () => source.close();
     return () => source.close();
   }, [job?.id]);
@@ -56,7 +53,6 @@ export function Dashboard({ user }) {
       try {
         const next = await api(`/api/scan/jobs/${activeJob.id}`);
         setJob(next);
-        setLines(next.lines || []);
         if (["success", "failed", "expired"].includes(next.status)) {
           refresh();
           refreshKey("reports", () => api("/api/reports")).catch(() => {});
@@ -67,7 +63,6 @@ export function Dashboard({ user }) {
           status: "expired",
           progress: 0,
           message: "Scan job expired after server restart. Start a new scan if needed.",
-          lines: ["Scan job expired after server restart. Start a new scan if needed."]
         });
       }
     }, 120000);
@@ -75,35 +70,44 @@ export function Dashboard({ user }) {
   }, [job?.id, job?.status, data?.latest_job?.id, data?.latest_job?.status]);
 
   async function runScan() {
-    const next = await api("/api/scan/run", {
-      method: "POST",
-      body: JSON.stringify({
-        scan_date: scanDate || null,
-        force_refresh: forceRefresh
-      })
-    });
-    setLines(next.lines || []);
-    setJob(next);
-    if (next.status === "skipped") {
-      refresh();
-      refreshKey("reports", () => api("/api/reports")).catch(() => {});
+    setBusyAction("scan");
+    try {
+      const next = await api("/api/scan/run", {
+        method: "POST",
+        body: JSON.stringify({
+          scan_date: scanDate || null,
+          force_refresh: forceRefresh
+        })
+      });
+      setJob(next);
+      if (next.status === "skipped") {
+        refresh();
+        refreshKey("reports", () => api("/api/reports")).catch(() => {});
+      }
+    } finally {
+      setBusyAction("");
     }
   }
 
   async function saveSchedule() {
-    const next = await api("/api/scheduler", {
-      method: "PUT",
-      body: JSON.stringify(scheduler)
-    });
-    setScheduler(next);
-    refresh();
+    setBusyAction("schedule");
+    try {
+      const next = await api("/api/scheduler", {
+        method: "PUT",
+        body: JSON.stringify(scheduler)
+      });
+      setScheduler(next);
+      refresh();
+    } finally {
+      setBusyAction("");
+    }
   }
 
   const holdings = data?.holdings || {};
   const isAdmin = Boolean(user?.is_admin || data?.is_admin);
   return (
     <section>
-      <PageTitle title="Dashboard" action={<button onClick={refresh}><RefreshCw size={16} />Refresh</button>} />
+      <PageTitle title="Dashboard" action={<DbRefreshButton cacheKey="dashboard" endpoint="/api/dashboard" disabled={loading} />} />
       {error && <Notice tone="danger">{error}</Notice>}
       <div className="metricGrid">
         <Metric label="Reports" value={loading ? "-" : data?.reports_count ?? 0} />
@@ -120,8 +124,8 @@ export function Dashboard({ user }) {
         <div className="panel">
           <div className="panelHeader">
             <h2>Scanner</h2>
-            <button onClick={runScan} disabled={job?.status === "running"}>
-              <Play size={16} />Run Scan
+            <button onClick={runScan} disabled={job?.status === "running" || busyAction === "scan"}>
+              <Play size={16} />{busyAction === "scan" ? "Starting..." : "Run Scan"}
             </button>
           </div>
           <div className="formGrid">
@@ -138,14 +142,14 @@ export function Dashboard({ user }) {
               Force refresh
             </label>
           </div>
-          <Progress job={job || data?.latest_job} lines={lines.length ? lines : data?.latest_job?.lines || []} />
+          <Progress job={job || data?.latest_job} />
         </div>
 
         {isAdmin && (
           <div className="panel">
             <div className="panelHeader">
               <h2>Schedule</h2>
-              <button onClick={saveSchedule}><CalendarClock size={16} />Save</button>
+              <button onClick={saveSchedule} disabled={busyAction === "schedule"}><CalendarClock size={16} />{busyAction === "schedule" ? "Saving..." : "Save"}</button>
             </div>
             <div className="formGrid">
               <label>
