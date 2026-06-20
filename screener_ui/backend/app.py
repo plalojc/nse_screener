@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from data.database import init_db
 from .routes import auth, backup, bootstrap, dashboard, portfolio, reports, scan, scheduler as scheduler_routes, settings as settings_routes
 from .auth import ensure_admin_user
 from .runtime import apply_schedule, scheduler
@@ -49,6 +50,7 @@ class ReactStaticFiles(StaticFiles):
 @app.on_event("startup")
 def startup() -> None:
     ensure_agent_root()
+    init_db()
     ensure_admin_user()
     init_store()
     scheduler.start()

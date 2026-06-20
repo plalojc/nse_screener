@@ -475,6 +475,17 @@ def delete_profit_loss_sale(user_email: str, sale_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def delete_user_data(user_email: str) -> None:
+    init_store()
+    settings_prefix = f"{user_email}:%"
+    with _connect() as conn:
+        execute(conn, f"DELETE FROM {T_HOLDING_SALES} WHERE user_email=?", (user_email,))
+        execute(conn, f"DELETE FROM {T_HOLDINGS} WHERE user_email=?", (user_email,))
+        execute(conn, f"DELETE FROM {T_WATCHLIST} WHERE user_email=?", (user_email,))
+        execute(conn, f"DELETE FROM {T_UI_SETTINGS} WHERE key LIKE ?", (settings_prefix,))
+        conn.commit()
+
+
 def _setting_key(key: str, user_email: str | None = None) -> str:
     return f"{user_email}:{key}" if user_email else key
 

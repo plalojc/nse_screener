@@ -8,8 +8,8 @@ import re
 import time
 from typing import Any
 
+import requests
 from colorama import Fore, Style
-from openai import OpenAI
 
 from config import (
     GROK_VALIDATOR_BATCH_DELAY,
@@ -214,7 +214,6 @@ def validate_signals_grok_batch(signals: list, scan_date: str, batch_size: int |
             sig["llm_model"] = GROK_VALIDATOR_MODEL
         return signals
 
-    client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
     batch_size = batch_size or GROK_VALIDATOR_BATCH_SIZE
 
     verdict_cache = get_llm_verdict_cache(
@@ -251,15 +250,26 @@ def validate_signals_grok_batch(signals: list, scan_date: str, batch_size: int |
             try:
                 api_batches += 1 if attempt == 0 else 0
                 print(f"  [Grok] Evaluating batch {start // batch_size + 1} of {total_batches} ({len(batch)} stock(s))...")
-                response = client.chat.completions.create(
-                    model=GROK_VALIDATOR_MODEL,
-                    messages=[
-                        {"role": "system", "content": "You are a quantitative analyst. Output exact JSON only."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
+                response = requests.post(
+                    "https://api.x.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {XAI_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": GROK_VALIDATOR_MODEL,
+                        "messages": [
+                            {"role": "system", "content": "You are a quantitative analyst. Output exact JSON only."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=180,
                 )
-                parsed = _parse_json(response.choices[0].message.content or "")
+                response.raise_for_status()
+                payload = response.json()
+                content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+                parsed = _parse_json(content or "")
                 evaluations = parsed.get("evaluations", [])
                 eval_map = {
                     str(item.get("symbol", "")).upper().strip(): item

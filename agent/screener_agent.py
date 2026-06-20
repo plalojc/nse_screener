@@ -2,13 +2,14 @@
 # ============================================================
 # agent/screener_agent.py - Main orchestrator
 # ============================================================
+import time
 from datetime import date, datetime, timedelta
 from tabulate import tabulate
 from colorama import Fore, Style, init
 
 from data.database       import (init_db, save_signal,
                                   open_position, get_open_positions,
-                                  save_breakout_log,
+                                  save_breakout_logs,
                                   get_invalid_symbols, add_invalid_instrument)
 from data.nse_bhavcopy_client import fetch_nse_instruments as fetch_bhavcopy_instruments
 from data.nse_bhavcopy_client import load_ohlcv_bulk as load_bhavcopy_ohlcv_bulk
@@ -28,7 +29,6 @@ from analysis.catalyst_news import (
     get_catalyst_map,
 )
 from analysis.technical import add_indicators
-from analysis.gemini_validator import validate_signals_gemini_direct
 from analysis.grok_validator import validate_signals_grok_batch
 from agent.portfolio_tracker   import check_exit_signals
 from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
@@ -42,6 +42,14 @@ from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATOR, LLM_VALIDATION_LIMIT,
                     MAX_CATALYST_CANDIDATES)
 
 init(autoreset=True)
+
+
+def _flow(message: str) -> None:
+    print(Fore.CYAN + f"[Flow] {message}", flush=True)
+
+
+def _elapsed(start: float) -> str:
+    return f"{time.perf_counter() - start:.1f}s"
 
 
 def _validator_name() -> str:
@@ -95,22 +103,72 @@ def _rank_signal(sig: dict) -> tuple:
 
 def _select_llm_candidates(signals: list[dict]) -> list[dict]:
     """
-    Pick the top N unique symbols for LLM validation using local scanner output.
-    If one symbol has multiple signal rows, all rows for selected symbols are
-    passed through so reporting stays consistent.
+    Pick top unique symbols for LLM validation using quota buckets:
+      - 60% technical: BREAKOUT / STAGE1 / PULLBACK
+      - 30% news-driven: NEWS
+      - 10% fallback/watchlist: WATCHLIST and anything left
+
+    Unused quota is backfilled by the strongest remaining candidates, so the
+    admin limit is still used as fully as possible.
     """
     if LLM_VALIDATION_LIMIT <= 0 or len(signals) <= LLM_VALIDATION_LIMIT:
         return signals
 
-    ranked = sorted(signals, key=_rank_signal, reverse=True)
+    def category(sig: dict) -> str:
+        signal_type = str(sig.get("signal_type") or "").upper()
+        if signal_type == "NEWS":
+            return "news"
+        if signal_type == "WATCHLIST":
+            return "fallback"
+        if signal_type in {"BREAKOUT", "STAGE1", "PULLBACK"}:
+            return "technical"
+        return "fallback"
+
+    limit = LLM_VALIDATION_LIMIT
+    quotas = {
+        "technical": int(limit * 0.60),
+        "news": int(limit * 0.30),
+    }
+    quotas["fallback"] = max(0, limit - quotas["technical"] - quotas["news"])
+
     selected_symbols = []
     selected_set = set()
-    for sig in ranked:
-        symbol = sig.get("symbol")
-        if symbol and symbol not in selected_set:
+
+    def add_from(candidates: list[dict], quota: int) -> int:
+        added = 0
+        for sig in sorted(candidates, key=_rank_signal, reverse=True):
+            if added >= quota or len(selected_symbols) >= limit:
+                break
+            symbol = sig.get("symbol")
+            if not symbol or symbol in selected_set:
+                continue
             selected_symbols.append(symbol)
             selected_set.add(symbol)
-        if len(selected_symbols) >= LLM_VALIDATION_LIMIT:
+            added += 1
+        return added
+
+    buckets = {"technical": [], "news": [], "fallback": []}
+    for sig in signals:
+        buckets[category(sig)].append(sig)
+
+    add_from(buckets["technical"], quotas["technical"])
+    add_from(buckets["news"], quotas["news"])
+    add_from(buckets["fallback"], quotas["fallback"])
+
+    remaining_slots = limit - len(selected_symbols)
+    if remaining_slots > 0:
+        remaining = [
+            sig for sig in signals
+            if sig.get("symbol") and sig.get("symbol") not in selected_set
+        ]
+        add_from(remaining, remaining_slots)
+
+    for sig in signals:
+        symbol = sig.get("symbol")
+        if symbol and symbol not in selected_set and len(selected_symbols) < limit:
+            selected_symbols.append(symbol)
+            selected_set.add(symbol)
+        if len(selected_symbols) >= limit:
             break
 
     return [sig for sig in signals if sig.get("symbol") in selected_set]
@@ -162,6 +220,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     4. LLM validation of top rule-ranked signals only
     5. Auto-open Stage2 positions for top signals
     """
+    scan_started = time.perf_counter()
     print(Fore.CYAN + "=" * 60)
     print(Fore.CYAN + "   NSE BREAKOUT AGENT - DAILY SCAN")
     print(Fore.CYAN + "=" * 60)
@@ -178,14 +237,19 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     init_db()
 
+    phase_started = time.perf_counter()
+    _flow("Phase bhavcopy-cache started")
     latest = update_bhavcopy_cache(scan_date=target_date, force_refresh=force_refresh)
     if not latest:
         print(Fore.RED + "   [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
         return []
     target_date = latest
     print(Fore.CYAN + f"   Bhavcopy  : using cached trading date {target_date}")
+    _flow(f"Phase bhavcopy-cache completed in {_elapsed(phase_started)}")
 
     # 
+    phase_started = time.perf_counter()
+    _flow("Phase exit-check started")
     print(Fore.YELLOW + "\n[1/5] Checking exit conditions...")
     exits = check_exit_signals()
     if exits:
@@ -194,8 +258,11 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             print(clr + f"  EXIT {e['symbol']} | PnL: {e['pnl_pct']:+.2f}% | {e['reason']}")
     else:
         print("  No exits triggered.")
+    _flow(f"Phase exit-check completed in {_elapsed(phase_started)} | exits={len(exits)}")
 
     # Load blacklist once here - used to pre-filter the universe before the loop
+    phase_started = time.perf_counter()
+    _flow("Phase universe-load started")
     invalid_symbols = get_invalid_symbols()
 
     if symbols:
@@ -214,15 +281,22 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
         universe  = [s for s in instruments_df["symbol"].tolist() if s not in invalid_symbols]
         print(f"  Universe: {len(universe)} NSE EQ instruments "
               f"({raw_count - len(universe)} blacklisted removed).")
+    _flow(f"Phase universe-load completed in {_elapsed(phase_started)} | universe={len(universe)}")
 
     catalyst_map = {}
     if ENABLE_CATALYST_NEWS:
+        phase_started = time.perf_counter()
+        _flow("Phase catalyst-fetch started")
         print(Fore.YELLOW + "\n[2b] Fetching catalyst/news events...")
         catalyst_rows = fetch_and_store_catalysts(target_date, universe)
         catalyst_map = get_catalyst_map(target_date)
         print(
             f"  Catalyst events cached/updated: {catalyst_rows} "
             f"| Symbols with catalysts: {len(catalyst_map)}"
+        )
+        _flow(
+            f"Phase catalyst-fetch completed in {_elapsed(phase_started)} "
+            f"| rows={catalyst_rows} symbols={len(catalyst_map)}"
         )
 
     # == Step 3: Scan universe =============================================
@@ -234,7 +308,13 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     scan_universe = [s for s in universe if s not in open_pos]
     skipped = total - len(scan_universe)
     print(f"  Loading OHLCV cache for {len(scan_universe)} scan symbol(s)...")
+    phase_started = time.perf_counter()
+    _flow(f"Phase ohlcv-bulk-load started | symbols={len(scan_universe)}")
     ohlcv_by_symbol = load_bhavcopy_ohlcv_bulk(scan_universe, upto_date=target_date)
+    _flow(
+        f"Phase ohlcv-bulk-load completed in {_elapsed(phase_started)} "
+        f"| loaded={len(ohlcv_by_symbol)}"
+    )
     use_breakout = not SCAN_SIGNAL_TYPES or "BREAKOUT" in SCAN_SIGNAL_TYPES
     use_pullback = "PULLBACK" in SCAN_SIGNAL_TYPES
     use_stage1 = "STAGE1" in SCAN_SIGNAL_TYPES
@@ -252,7 +332,10 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     prefiltered = 0
     news_fill_candidates = []
     watchlist_fill_candidates = []
+    indicator_count = 0
 
+    phase_started = time.perf_counter()
+    _flow(f"Phase technical-scan started | symbols={len(scan_universe)}")
     for i, symbol in enumerate(universe, 1):
         if symbol in open_pos:
             continue
@@ -284,6 +367,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             continue
 
         df = add_indicators(df)
+        indicator_count += 1
         symbol_has_signal = False
         for scanner in scanners:
             sig = scanner(df)
@@ -308,6 +392,13 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                     news_fill_candidates.append(sig)
                 else:
                     signals.append(sig)
+
+    _flow(
+        f"Phase technical-scan completed in {_elapsed(phase_started)} "
+        f"| indicators={indicator_count}/{len(scan_universe)} "
+        f"signals={len(signals)} news_fill={len(news_fill_candidates)} "
+        f"watchlist_fill={len(watchlist_fill_candidates)} prefiltered={prefiltered}"
+    )
 
     news_fill_candidates.sort(key=_rank_signal, reverse=True)
     if MAX_CATALYST_CANDIDATES > 0:
@@ -343,15 +434,25 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             print(Fore.YELLOW + f"\n[4/5] Grok batch validation ({len(llm_candidates)} signal(s))...")
             print(Fore.CYAN + f"      Model  : {GROK_VALIDATOR_MODEL}")
             print(Fore.CYAN + "      Source : Grok web/X-aware batch analysis")
+            phase_started = time.perf_counter()
+            _flow(f"Phase llm-validation started | provider=grok candidates={len(llm_candidates)}")
             validate_signals_grok_batch(llm_candidates, scan_date=target_date)
+            _flow(f"Phase llm-validation completed in {_elapsed(phase_started)}")
         else:
+            from analysis.gemini_validator import validate_signals_gemini_direct
+
             print(Fore.YELLOW + f"\n[4/5] Gemini validation ({len(llm_candidates)} signal(s))...")
             print(Fore.CYAN + f"      Model  : {GEMINI_VALIDATOR_MODEL}")
             print(Fore.CYAN + "      Source : Gemini + Google Search grounding")
+            phase_started = time.perf_counter()
+            _flow(f"Phase llm-validation started | provider=gemini candidates={len(llm_candidates)}")
             validate_signals_gemini_direct(llm_candidates, scan_date=target_date)
+            _flow(f"Phase llm-validation completed in {_elapsed(phase_started)}")
 
-        for sig in signals:
-            save_breakout_log(target_date, sig)
+        phase_started = time.perf_counter()
+        _flow(f"Phase save-breakout-log started | rows={len(signals)}")
+        save_breakout_logs(target_date, signals)
+        _flow(f"Phase save-breakout-log completed in {_elapsed(phase_started)}")
         print(
             f"  {len(signals)} signal(s) saved to breakout_log "
             f"({len(skipped_llm)} skipped before LLM)."
@@ -362,6 +463,8 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
             sig["scan_date"] = target_date
 
     # == Step 5: Display and auto-enter top signals ========================
+    phase_started = time.perf_counter()
+    _flow("Phase results started")
     print(Fore.YELLOW + f"\n[5/5] Results: {len(signals)} signal candidate(s) found.")
     if signals:
         # Sort: CONFIRM first, then WEAK, then REJECT/SKIPPED; within each group by score.
@@ -451,6 +554,8 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
 
     # == TOP PICKS: the final actionable shortlist =========================
     _print_top_picks(signals, target_date)
+    _flow(f"Phase results completed in {_elapsed(phase_started)}")
+    _flow(f"Daily scan completed in {_elapsed(scan_started)} | signals={len(signals)}")
 
     return signals
 

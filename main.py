@@ -33,16 +33,6 @@ def main():
     init_db()
 
     if args.command == "scan":
-        # Auto-route to backtest when a past date is given
-        if args.date:
-            from datetime import date as _date
-            given = _date.fromisoformat(args.date)
-            today = _date.today()
-            if given < today:
-                print(f"  [INFO] {args.date} is a past date -> running backtest automatically.")
-                print(f"         (Use 'python main.py backtest --date {args.date}' to skip this message)\n")
-                _run_backtest(args.date, args.days)
-                return
         run_daily_scan(scan_date=args.date, force_refresh=args.force_refresh)
     elif args.command == "portfolio":
         print_portfolio()

@@ -41,6 +41,9 @@ instruments_cache/
 # Zip archives / backups
 *.zip
 
+# Generated deployment package
+catalyst_deploy/
+
 # OS
 .DS_Store
 Thumbs.db

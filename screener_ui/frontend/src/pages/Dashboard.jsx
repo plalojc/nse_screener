@@ -30,12 +30,12 @@ export function Dashboard({ user }) {
   }, [data]);
 
   useEffect(() => {
-    if (!job?.id || ["success", "failed"].includes(job.status)) return;
+    if (!job?.id || ["success", "failed", "expired"].includes(job.status)) return;
     const source = new EventSource(`${API_BASE}/api/scan/jobs/${job.id}/events?token=${encodeURIComponent(getAccessToken())}`);
     source.addEventListener("snapshot", (event) => {
       const next = JSON.parse(event.data);
       setJob(next);
-      if (["success", "failed"].includes(next.status)) {
+      if (["success", "failed", "expired"].includes(next.status)) {
         source.close();
         refresh();
         refreshKey("reports", () => api("/api/reports")).catch(() => {});
@@ -51,20 +51,26 @@ export function Dashboard({ user }) {
 
   useEffect(() => {
     const activeJob = job?.id ? job : data?.latest_job;
-    if (!activeJob?.id || ["success", "failed", "skipped"].includes(activeJob.status)) return;
+    if (!activeJob?.id || ["success", "failed", "skipped", "expired"].includes(activeJob.status)) return;
     const timer = window.setInterval(async () => {
       try {
         const next = await api(`/api/scan/jobs/${activeJob.id}`);
         setJob(next);
         setLines(next.lines || []);
-        if (["success", "failed"].includes(next.status)) {
+        if (["success", "failed", "expired"].includes(next.status)) {
           refresh();
           refreshKey("reports", () => api("/api/reports")).catch(() => {});
         }
       } catch {
-        // EventSource remains the primary channel; polling is only a fallback.
+        setJob({
+          id: activeJob.id,
+          status: "expired",
+          progress: 0,
+          message: "Scan job expired after server restart. Start a new scan if needed.",
+          lines: ["Scan job expired after server restart. Start a new scan if needed."]
+        });
       }
-    }, 1500);
+    }, 120000);
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status, data?.latest_job?.id, data?.latest_job?.status]);
 

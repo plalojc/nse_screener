@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from config import REPORT_DIR
 from data.database import T_BREAKOUT_LOG, T_LLM_EVALUATIONS, delete_breakout_log, get_conn
 from data.db_backend import execute, read_dataframe
 from report.html_report_writer import render as render_html_report
 from .user_settings import app_settings
+
+
+DOWNLOAD_DIR = Path(REPORT_DIR) / "downloads"
 
 
 def list_reports() -> list[dict[str, Any]]:
@@ -48,6 +53,9 @@ def load_report_signals(report_date: str) -> list[dict[str, Any]]:
                    COALESCE(le.panel_method, b.panel_method) AS panel_method,
                    COALESCE(le.llm_model, b.llm_model) AS llm_model,
                    b.vcp_detected, b.bull_flag_detected, b.pattern_score,
+                   b.catalyst_category, b.catalyst_summary, b.catalyst_source,
+                   b.catalyst_url, b.catalyst_score, b.catalyst_confidence,
+                   b.catalyst_theme, b.catalyst_mapping_source,
                    b.created_at
             FROM {T_BREAKOUT_LOG} b
             LEFT JOIN latest_eval le
@@ -87,3 +95,30 @@ def render_report(report_date: str, user_email: str | None = None) -> str | None
         tradingview_chart_id=settings["tradingview_chart_id"],
         include_weak=settings["report_include_weak"],
     )
+
+
+def _cleanup_old_downloads(keep_path: Path) -> None:
+    if not DOWNLOAD_DIR.exists():
+        return
+    keep = keep_path.resolve()
+    for path in DOWNLOAD_DIR.glob("NSE-Breakout-*.html"):
+        try:
+            if path.resolve() != keep:
+                path.unlink()
+        except OSError:
+            pass
+
+
+def build_report_download_file(report_date: str, user_email: str | None = None) -> Path | None:
+    html = render_report(report_date, user_email)
+    if not html:
+        return None
+
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"NSE-Breakout-{report_date}.html"
+    out_path = DOWNLOAD_DIR / filename
+    if out_path.exists():
+        out_path.unlink()
+    out_path.write_text(html, encoding="utf-8")
+    _cleanup_old_downloads(out_path)
+    return out_path

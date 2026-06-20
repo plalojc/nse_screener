@@ -6,12 +6,12 @@ from __future__ import annotations
 import json
 import math
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
 from typing import Iterable
 
-import feedparser
 import requests
 
 from analysis.theme_mapper import match_policy_themes
@@ -109,13 +109,38 @@ def _parse_any_date(value: str | None) -> str:
         return parsedate_to_datetime(raw).date().isoformat()
     except Exception:
         pass
-    try:
-        parsed = feedparser._parse_date(raw)
-        if parsed:
-            return datetime(*parsed[:6]).date().isoformat()
-    except Exception:
-        pass
     return datetime.now().date().isoformat()
+
+
+def _rss_entries(feed_url: str) -> list[dict]:
+    response = requests.get(
+        feed_url,
+        timeout=CATALYST_SOURCE_TIMEOUT,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+            )
+        },
+    )
+    response.raise_for_status()
+    root = ET.fromstring(response.content)
+
+    entries: list[dict] = []
+    for item in root.findall(".//item")[:100]:
+        def text(name: str) -> str:
+            node = item.find(name)
+            return node.text if node is not None and node.text else ""
+
+        entries.append({
+            "title": text("title"),
+            "summary": text("description"),
+            "description": text("description"),
+            "published": text("pubDate"),
+            "updated": text("pubDate"),
+            "link": text("link"),
+        })
+    return entries
 
 
 def _categorise(text: str) -> tuple[str, int, int]:
@@ -247,12 +272,12 @@ def fetch_policy_events(scan_date: str, universe_symbols: set[str]) -> list[dict
 
     for feed_url in PIB_RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
+            entries = _rss_entries(feed_url)
         except Exception as exc:
             print(f"  [Catalyst] PIB feed unavailable: {exc}")
             continue
 
-        for entry in feed.entries[:100]:
+        for entry in entries[:100]:
             published = _parse_any_date(entry.get("published") or entry.get("updated"))
             try:
                 event_day = datetime.strptime(published, "%Y-%m-%d").date()

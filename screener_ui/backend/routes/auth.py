@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import authenticate, current_user, token_pair, verify_token
-from ..auth import add_user, change_own_password, change_user_password, public_users, remove_user, require_admin
+from ..auth import add_user, change_own_password, change_user_password, public_users, remove_user, require_admin, set_user_disabled
 
 
 router = APIRouter(prefix="/auth")
@@ -33,6 +33,10 @@ class PasswordChangeRequest(BaseModel):
 
 class AdminPasswordRequest(BaseModel):
     password: str
+
+
+class UserDisabledRequest(BaseModel):
+    disabled: bool
 
 
 @router.post("/login")
@@ -68,6 +72,12 @@ def create_user(payload: UserRequest, admin=Depends(require_admin)) -> dict[str,
 def delete_user(email: str, admin=Depends(require_admin)) -> dict[str, str]:
     remove_user(email)
     return {"status": "deleted"}
+
+
+@router.put("/users/{email}/disabled")
+def disable_user(email: str, payload: UserDisabledRequest, admin=Depends(require_admin)) -> dict[str, str]:
+    set_user_disabled(email, payload.disabled)
+    return {"status": "updated"}
 
 
 @router.put("/users/{email}/password")

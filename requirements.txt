@@ -2,13 +2,10 @@ pandas
 pandas-ta
 jugaad-data
 requests
-feedparser
 apscheduler
 tabulate
 colorama
 python-dotenv
-google-genai
-openai
 psycopg[binary]
 fastapi
-uvicorn[standard]
+uvicorn

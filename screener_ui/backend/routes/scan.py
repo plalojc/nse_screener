@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from ..auth import CurrentUser, current_user, verify_token
 from ..reports import report_exists
 from ..runtime import jobs
-from ..scanner_runner import sse_event
+from ..scanner_runner import public_message, sse_event
 
 
 router = APIRouter(prefix="/scan")
@@ -20,6 +20,20 @@ router = APIRouter(prefix="/scan")
 class ScanRequest(BaseModel):
     scan_date: str | None = None
     force_refresh: bool = False
+
+
+def _expired_job(job_id: str) -> dict[str, Any]:
+    return {
+        "id": job_id,
+        "status": "expired",
+        "progress": 0,
+        "message": "Scan job expired after server restart. Start a new scan if needed.",
+        "started_at": None,
+        "ended_at": datetime.now().isoformat(timespec="seconds"),
+        "exit_code": None,
+        "lines": ["Scan job expired after server restart. Start a new scan if needed."],
+        "command": [],
+    }
 
 
 def _effective_report_date(scan_date: str | None) -> str:
@@ -76,7 +90,7 @@ def scan_jobs(user: CurrentUser = Depends(current_user)) -> list[dict[str, Any]]
 def scan_job(job_id: str, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
     job = jobs.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Scan job not found")
+        return _expired_job(job_id)
     return job.snapshot()
 
 
@@ -88,7 +102,10 @@ async def scan_events(job_id: str, token: str | None = None) -> StreamingRespons
         raise HTTPException(status_code=401, detail="Login required")
     job = jobs.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Scan job not found")
+        async def expired():
+            yield sse_event("snapshot", _expired_job(job_id))
+
+        return StreamingResponse(expired(), media_type="text/event-stream")
 
     async def generate():
         sent = 0
@@ -97,11 +114,14 @@ async def scan_events(job_id: str, token: str | None = None) -> StreamingRespons
             while sent < len(job.lines):
                 line = job.lines[sent]
                 sent += 1
-                yield sse_event("line", {"line": line, "progress": job.progress, "status": job.status})
+                yield sse_event("line", {
+                    "line": public_message(line, job.message),
+                    "progress": job.progress,
+                    "status": job.status,
+                })
             yield sse_event("snapshot", job.snapshot())
             if job.status in {"success", "failed"} and sent >= len(job.lines):
                 break
             await asyncio.sleep(0.8)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
-from ..auth import CurrentUser, current_user, verify_token

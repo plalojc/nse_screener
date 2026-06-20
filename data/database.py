@@ -25,6 +25,7 @@ T_BREAKOUT_LOG = table_name("breakout_log", system_schema())
 T_LLM_EVALUATIONS = table_name("llm_evaluations", system_schema())
 T_CATALYST_EVENTS = table_name("catalyst_events", system_schema())
 T_INVALID_INSTRUMENTS = table_name("invalid_instruments", system_schema())
+DB_WRITE_BATCH_SIZE = 100
 
 
 def get_conn():
@@ -109,6 +110,14 @@ def init_db():
             vcp_detected        INTEGER,
             bull_flag_detected  INTEGER,
             pattern_score       INTEGER,
+            catalyst_category   TEXT,
+            catalyst_summary    TEXT,
+            catalyst_source     TEXT,
+            catalyst_url        TEXT,
+            catalyst_score      INTEGER,
+            catalyst_confidence INTEGER,
+            catalyst_theme      TEXT,
+            catalyst_mapping_source TEXT,
             created_at          {now_default},
             UNIQUE(scan_date, symbol)
         )
@@ -123,6 +132,14 @@ def init_db():
         ("vcp_detected", "INTEGER"),
         ("bull_flag_detected", "INTEGER"),
         ("pattern_score", "INTEGER"),
+        ("catalyst_category", "TEXT"),
+        ("catalyst_summary", "TEXT"),
+        ("catalyst_source", "TEXT"),
+        ("catalyst_url", "TEXT"),
+        ("catalyst_score", "INTEGER"),
+        ("catalyst_confidence", "INTEGER"),
+        ("catalyst_theme", "TEXT"),
+        ("catalyst_mapping_source", "TEXT"),
     ]:
         _add_column(conn, T_BREAKOUT_LOG, col, typedef)
 
@@ -297,56 +314,8 @@ def get_llm_verdict_cache(scan_date: str, panel_method: str | None = None, llm_m
     }
 
 
-def save_breakout_log(scan_date: str, sig: dict):
-    conn = get_conn()
-    execute(conn, f"""
-        INSERT INTO {T_BREAKOUT_LOG}
-            (scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
-             stage, ema20, ema50, atr14, swing_low, reasons,
-             llm_verdict, llm_confidence, llm_reasoning,
-             panel_method, llm_model, vcp_detected, bull_flag_detected, pattern_score)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(scan_date, symbol) DO UPDATE SET
-            signal_type = excluded.signal_type,
-            close       = excluded.close,
-            rsi         = excluded.rsi,
-            vol_ratio   = excluded.vol_ratio,
-            score       = excluded.score,
-            stage       = excluded.stage,
-            ema20       = excluded.ema20,
-            ema50       = excluded.ema50,
-            atr14       = excluded.atr14,
-            swing_low   = excluded.swing_low,
-            reasons     = excluded.reasons,
-            llm_verdict = CASE
-                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_verdict
-                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_verdict
-                ELSE llm_verdict
-            END,
-            llm_confidence = CASE
-                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_confidence
-                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_confidence
-                ELSE llm_confidence
-            END,
-            llm_reasoning = CASE
-                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_reasoning
-                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_reasoning
-                ELSE llm_reasoning
-            END,
-            panel_method = CASE
-                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.panel_method
-                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.panel_method
-                ELSE panel_method
-            END,
-            llm_model = CASE
-                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_model
-                WHEN llm_verdict IS NULL OR llm_verdict IN ('SKIPPED', '') THEN excluded.llm_model
-                ELSE llm_model
-            END,
-            vcp_detected       = COALESCE(excluded.vcp_detected, vcp_detected),
-            bull_flag_detected = COALESCE(excluded.bull_flag_detected, bull_flag_detected),
-            pattern_score      = COALESCE(excluded.pattern_score, pattern_score)
-    """, (
+def _breakout_log_row(scan_date: str, sig: dict) -> tuple:
+    return (
         scan_date,
         sig.get("symbol"),
         sig.get("signal_type"),
@@ -368,12 +337,113 @@ def save_breakout_log(scan_date: str, sig: dict):
         sig.get("vcp_detected"),
         sig.get("bull_flag_detected"),
         sig.get("pattern_score"),
-    ))
+        sig.get("catalyst_category"),
+        sig.get("catalyst_summary"),
+        sig.get("catalyst_source"),
+        sig.get("catalyst_url"),
+        sig.get("catalyst_score"),
+        sig.get("catalyst_confidence"),
+        sig.get("catalyst_theme"),
+        sig.get("catalyst_mapping_source"),
+    )
+
+
+def _llm_evaluation_row(scan_date: str, sig: dict) -> tuple | None:
     verdict = sig.get("llm_verdict")
     panel_method = sig.get("panel_method")
     llm_model = sig.get("llm_model")
-    if verdict and verdict not in ("", "SKIPPED") and panel_method and llm_model:
-        execute(conn, f"""
+    if not (verdict and verdict not in ("", "SKIPPED") and panel_method and llm_model):
+        return None
+    return (
+        scan_date,
+        sig.get("symbol"),
+        panel_method,
+        llm_model,
+        verdict,
+        sig.get("llm_confidence"),
+        sig.get("llm_reasoning"),
+    )
+
+
+def _chunks(rows: list[tuple], size: int = DB_WRITE_BATCH_SIZE):
+    for start in range(0, len(rows), size):
+        yield rows[start:start + size]
+
+
+def save_breakout_logs(scan_date: str, signals: list[dict]) -> int:
+    if not signals:
+        return 0
+    conn = get_conn()
+    insert_target = f"{T_BREAKOUT_LOG} AS existing" if is_postgres() else T_BREAKOUT_LOG
+    existing = "existing." if is_postgres() else ""
+    breakout_sql = f"""
+        INSERT INTO {insert_target}
+            (scan_date, symbol, signal_type, close, rsi, vol_ratio, score,
+             stage, ema20, ema50, atr14, swing_low, reasons,
+             llm_verdict, llm_confidence, llm_reasoning,
+             panel_method, llm_model, vcp_detected, bull_flag_detected, pattern_score,
+             catalyst_category, catalyst_summary, catalyst_source, catalyst_url,
+             catalyst_score, catalyst_confidence, catalyst_theme, catalyst_mapping_source)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(scan_date, symbol) DO UPDATE SET
+            signal_type = excluded.signal_type,
+            close       = excluded.close,
+            rsi         = excluded.rsi,
+            vol_ratio   = excluded.vol_ratio,
+            score       = excluded.score,
+            stage       = excluded.stage,
+            ema20       = excluded.ema20,
+            ema50       = excluded.ema50,
+            atr14       = excluded.atr14,
+            swing_low   = excluded.swing_low,
+            reasons     = excluded.reasons,
+            llm_verdict = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_verdict
+                WHEN {existing}llm_verdict IS NULL OR {existing}llm_verdict IN ('SKIPPED', '') THEN excluded.llm_verdict
+                ELSE {existing}llm_verdict
+            END,
+            llm_confidence = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_confidence
+                WHEN {existing}llm_verdict IS NULL OR {existing}llm_verdict IN ('SKIPPED', '') THEN excluded.llm_confidence
+                ELSE {existing}llm_confidence
+            END,
+            llm_reasoning = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_reasoning
+                WHEN {existing}llm_verdict IS NULL OR {existing}llm_verdict IN ('SKIPPED', '') THEN excluded.llm_reasoning
+                ELSE {existing}llm_reasoning
+            END,
+            panel_method = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.panel_method
+                WHEN {existing}llm_verdict IS NULL OR {existing}llm_verdict IN ('SKIPPED', '') THEN excluded.panel_method
+                ELSE {existing}panel_method
+            END,
+            llm_model = CASE
+                WHEN excluded.llm_verdict NOT IN ('SKIPPED', '') THEN excluded.llm_model
+                WHEN {existing}llm_verdict IS NULL OR {existing}llm_verdict IN ('SKIPPED', '') THEN excluded.llm_model
+                ELSE {existing}llm_model
+            END,
+            vcp_detected       = COALESCE(excluded.vcp_detected, {existing}vcp_detected),
+            bull_flag_detected = COALESCE(excluded.bull_flag_detected, {existing}bull_flag_detected),
+            pattern_score      = COALESCE(excluded.pattern_score, {existing}pattern_score),
+            catalyst_category  = COALESCE(excluded.catalyst_category, {existing}catalyst_category),
+            catalyst_summary   = COALESCE(excluded.catalyst_summary, {existing}catalyst_summary),
+            catalyst_source    = COALESCE(excluded.catalyst_source, {existing}catalyst_source),
+            catalyst_url       = COALESCE(excluded.catalyst_url, {existing}catalyst_url),
+            catalyst_score     = COALESCE(excluded.catalyst_score, {existing}catalyst_score),
+            catalyst_confidence = COALESCE(excluded.catalyst_confidence, {existing}catalyst_confidence),
+            catalyst_theme     = COALESCE(excluded.catalyst_theme, {existing}catalyst_theme),
+            catalyst_mapping_source = COALESCE(excluded.catalyst_mapping_source, {existing}catalyst_mapping_source)
+    """
+    breakout_rows = [_breakout_log_row(scan_date, sig) for sig in signals]
+    for chunk in _chunks(breakout_rows):
+        executemany(conn, breakout_sql, chunk)
+
+    llm_rows = [
+        row for row in (_llm_evaluation_row(scan_date, sig) for sig in signals)
+        if row is not None
+    ]
+    if llm_rows:
+        llm_sql = f"""
             INSERT INTO {T_LLM_EVALUATIONS}
                 (scan_date, symbol, panel_method, llm_model, verdict,
                  confidence, reasoning, updated_at)
@@ -383,17 +453,16 @@ def save_breakout_log(scan_date: str, sig: dict):
                 confidence=excluded.confidence,
                 reasoning=excluded.reasoning,
                 updated_at=excluded.updated_at
-        """, (
-            scan_date,
-            sig.get("symbol"),
-            panel_method,
-            llm_model,
-            verdict,
-            sig.get("llm_confidence"),
-            sig.get("llm_reasoning"),
-        ))
+        """
+        for chunk in _chunks(llm_rows):
+            executemany(conn, llm_sql, chunk)
     conn.commit()
     conn.close()
+    return len(signals)
+
+
+def save_breakout_log(scan_date: str, sig: dict):
+    save_breakout_logs(scan_date, [sig])
 
 
 def save_catalyst_events(events: list[dict]) -> int:

@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from data.db_backend import connect, ensure_schemas, execute, integrity_error_types, is_postgres, system_schema, table_name
+
 from .settings import UI_ROOT
 
 
@@ -22,6 +24,7 @@ REFRESH_TOKEN_DAYS = 2
 ADMIN_EMAIL = "plal.besu@gmail.com"
 AUTH_SECRET = os.environ.get("SCREENER_JWT_SECRET", "change-this-secret-before-deploying")
 USERS_FILE = Path(os.environ.get("SCREENER_USERS_FILE", UI_ROOT / "backend" / "users.json"))
+T_AUTH_USERS = table_name("auth_users", system_schema())
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -113,7 +116,7 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(password, stored)
 
 
-def load_users() -> list[dict[str, str]]:
+def _load_file_users() -> list[dict[str, str]]:
     if not USERS_FILE.exists():
         return []
     data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
@@ -122,29 +125,125 @@ def load_users() -> list[dict[str, str]]:
         {
             "email": str(item.get("email") or item.get("username") or "").strip().lower(),
             "password": str(item.get("password_hash") or item.get("password") or ""),
+            "disabled": bool(item.get("disabled", False)),
         }
         for item in users
         if str(item.get("email") or item.get("username") or "").strip()
     ]
 
 
-def save_users(users: list[dict[str, str]]) -> None:
-    USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _bool_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "disabled"}
+
+
+def _normalized_users(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     seen: set[str] = set()
     for item in users:
         email = str(item.get("email") or "").strip().lower()
-        password = str(item.get("password") or "")
+        password = str(item.get("password") or item.get("password_hash") or "")
         if not email or email in seen:
             continue
         seen.add(email)
-        normalized.append({"email": email, "password_hash": password})
+        normalized.append({"email": email, "password": password, "disabled": _bool_value(item.get("disabled", False))})
+    return normalized
+
+
+def _save_file_users(users: list[dict[str, Any]]) -> None:
+    USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    normalized = [
+        {"email": item["email"], "password_hash": item["password"], "disabled": bool(item.get("disabled", False))}
+        for item in _normalized_users(users)
+    ]
     USERS_FILE.write_text(json.dumps({"users": normalized}, indent=2), encoding="utf-8")
+
+
+def _init_auth_table(conn) -> None:
+    ensure_schemas(conn)
+    execute(conn, f"""
+        CREATE TABLE IF NOT EXISTS {T_AUTH_USERS} (
+            email TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            disabled BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    if is_postgres():
+        execute(conn, f"ALTER TABLE {T_AUTH_USERS} ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE")
+
+
+def _import_file_users_to_db(conn) -> None:
+    for user in _normalized_users(_load_file_users()):
+        if not user["password"]:
+            continue
+        execute(conn, f"""
+            INSERT INTO {T_AUTH_USERS} (email, password_hash, disabled)
+            VALUES (?, ?, ?)
+            ON CONFLICT (email) DO NOTHING
+        """, (user["email"], user["password"], bool(user.get("disabled", False))))
+
+
+def _remove_file_user(email: str) -> None:
+    if not USERS_FILE.exists():
+        return
+    next_users = [user for user in _load_file_users() if user["email"] != email]
+    _save_file_users(next_users)
+
+
+def _set_file_user_disabled(email: str, disabled: bool) -> None:
+    if not USERS_FILE.exists():
+        return
+    users = _load_file_users()
+    changed = False
+    for user in users:
+        if user["email"] == email:
+            user["disabled"] = disabled
+            changed = True
+    if changed:
+        _save_file_users(users)
+
+
+def load_users() -> list[dict[str, str]]:
+    if is_postgres():
+        with connect() as conn:
+            _init_auth_table(conn)
+            rows = execute(conn, f"""
+                SELECT email, password_hash, disabled
+                FROM {T_AUTH_USERS}
+                ORDER BY created_at, email
+            """).fetchall()
+        return [
+            {
+                "email": str(row["email"]).lower(),
+                "password": str(row["password_hash"]),
+                "disabled": bool(row.get("disabled", False)),
+            }
+            for row in rows
+        ]
+    return _load_file_users()
+
+
+def save_users(users: list[dict[str, str]]) -> None:
+    normalized = _normalized_users(users)
+    if is_postgres():
+        with connect() as conn:
+            _init_auth_table(conn)
+            execute(conn, f"DELETE FROM {T_AUTH_USERS}")
+            for user in normalized:
+                execute(conn, f"""
+                    INSERT INTO {T_AUTH_USERS} (email, password_hash, disabled)
+                    VALUES (?, ?, ?)
+                """, (user["email"], user["password"], bool(user.get("disabled", False))))
+        return
+    _save_file_users(normalized)
 
 
 def public_users() -> list[dict[str, Any]]:
     return [
-        {"email": user["email"], "is_admin": user["email"] == ADMIN_EMAIL}
+        {"email": user["email"], "is_admin": user["email"] == ADMIN_EMAIL, "disabled": bool(user.get("disabled", False))}
         for user in load_users()
     ]
 
@@ -157,12 +256,24 @@ def default_user_email() -> str:
 def authenticate(email: str, password: str) -> CurrentUser | None:
     email = email.strip().lower()
     for user in load_users():
-        if user["email"] == email and verify_password(password, user["password"]):
+        if user["email"] == email and not user.get("disabled", False) and verify_password(password, user["password"]):
             return CurrentUser(email=email)
     return None
 
 
 def ensure_admin_user() -> None:
+    if is_postgres():
+        with connect() as conn:
+            _init_auth_table(conn)
+            _import_file_users_to_db(conn)
+            row = execute(conn, f"SELECT email FROM {T_AUTH_USERS} WHERE email=?", (ADMIN_EMAIL,)).fetchone()
+            if not row:
+                execute(conn, f"""
+                    INSERT INTO {T_AUTH_USERS} (email, password_hash, disabled)
+                    VALUES (?, ?, FALSE)
+                """, (ADMIN_EMAIL, _pbkdf2_hash("admin123")))
+        return
+
     users = load_users()
     if any(user["email"] == ADMIN_EMAIL for user in users):
         return
@@ -182,6 +293,18 @@ def add_user(email: str, password: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Valid email is required")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if is_postgres():
+        try:
+            with connect() as conn:
+                _init_auth_table(conn)
+                execute(conn, f"""
+                    INSERT INTO {T_AUTH_USERS} (email, password_hash, disabled)
+                    VALUES (?, ?, FALSE)
+                """, (email, _pbkdf2_hash(password)))
+        except integrity_error_types() as exc:
+            raise HTTPException(status_code=409, detail="User already exists") from exc
+        return {"email": email, "is_admin": email == ADMIN_EMAIL}
+
     users = load_users()
     if any(user["email"] == email for user in users):
         raise HTTPException(status_code=409, detail="User already exists")
@@ -194,17 +317,73 @@ def remove_user(email: str) -> None:
     email = email.strip().lower()
     if email == ADMIN_EMAIL:
         raise HTTPException(status_code=400, detail="Admin user cannot be deleted")
+    from .store import delete_user_data
+
+    if is_postgres():
+        with connect() as conn:
+            _init_auth_table(conn)
+            row = execute(conn, f"SELECT email FROM {T_AUTH_USERS} WHERE email=?", (email,)).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="User not found")
+        delete_user_data(email)
+        with connect() as conn:
+            _init_auth_table(conn)
+            execute(conn, f"DELETE FROM {T_AUTH_USERS} WHERE email=?", (email,))
+        _remove_file_user(email)
+        return
+
     users = load_users()
     next_users = [user for user in users if user["email"] != email]
     if len(next_users) == len(users):
         raise HTTPException(status_code=404, detail="User not found")
+    delete_user_data(email)
     save_users(next_users)
+
+
+def set_user_disabled(email: str, disabled: bool) -> None:
+    email = email.strip().lower()
+    if email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Admin user cannot be disabled")
+    if is_postgres():
+        with connect() as conn:
+            _init_auth_table(conn)
+            cur = execute(conn, f"""
+                UPDATE {T_AUTH_USERS}
+                SET disabled=?, updated_at=CURRENT_TIMESTAMP
+                WHERE email=?
+            """, (disabled, email))
+            if getattr(cur, "rowcount", 0) == 0:
+                raise HTTPException(status_code=404, detail="User not found")
+        _set_file_user_disabled(email, disabled)
+        return
+
+    users = load_users()
+    changed = False
+    for user in users:
+        if user["email"] == email:
+            user["disabled"] = disabled
+            changed = True
+    if not changed:
+        raise HTTPException(status_code=404, detail="User not found")
+    save_users(users)
 
 
 def change_user_password(email: str, new_password: str) -> None:
     email = email.strip().lower()
     if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    if is_postgres():
+        with connect() as conn:
+            _init_auth_table(conn)
+            cur = execute(conn, f"""
+                UPDATE {T_AUTH_USERS}
+                SET password_hash=?, updated_at=CURRENT_TIMESTAMP
+                WHERE email=?
+            """, (_pbkdf2_hash(new_password), email))
+            if getattr(cur, "rowcount", 0) == 0:
+                raise HTTPException(status_code=404, detail="User not found")
+        return
+
     users = load_users()
     for user in users:
         if user["email"] == email:

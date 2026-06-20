@@ -24,11 +24,11 @@ def _env_int(name: str, default: int) -> int:
 # == User-facing settings ===================================================
 # These are the only values a normal user should need to edit in .env.
 
-LLM_VALIDATOR = os.getenv("LLM_VALIDATOR", "gemini").strip().lower()
+LLM_VALIDATOR = os.getenv("LLM_VALIDATOR", "grok").strip().lower()
 LLM_VALIDATION_LIMIT = _env_int("LLM_VALIDATION_LIMIT", 100)
 
-GEMINI_VALIDATOR_API_KEY = os.getenv("GEMINI_VALIDATOR_API_KEY", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+GEMINI_VALIDATOR_API_KEY = os.getenv("GEMINI_VALIDATOR_API_KEY", "")
 
 REPORT_INCLUDE_WEAK = _env_bool("REPORT_INCLUDE_WEAK", False)
 SCAN_TIME_IST = os.getenv("SCAN_TIME_IST", "08:20")

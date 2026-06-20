@@ -17,6 +17,20 @@ from .user_settings import app_settings
 
 
 STEP_PROGRESS = {
+    "phase bhavcopy-cache started": 8,
+    "phase bhavcopy-cache completed": 10,
+    "phase exit-check started": 12,
+    "phase universe-load started": 25,
+    "phase universe-load completed": 32,
+    "phase catalyst-fetch started": 34,
+    "phase ohlcv-bulk-load started": 38,
+    "phase ohlcv-bulk-load completed": 45,
+    "phase technical-scan started": 48,
+    "phase technical-scan completed": 64,
+    "phase llm-validation started": 74,
+    "phase llm-validation completed": 88,
+    "phase save-breakout-log started": 90,
+    "phase results started": 94,
     "checking exit": 12,
     "fetching catalyst": 25,
     "loading nse": 32,
@@ -36,23 +50,111 @@ NOISY_MESSAGE_PATTERNS = (
 )
 
 
+def _should_log_scan_line(line: str) -> bool:
+    clean = line.strip()
+    if not clean:
+        return False
+    lowered = clean.lower()
+    if any(pattern.search(clean) for pattern in NOISY_MESSAGE_PATTERNS):
+        return False
+    return any(token in lowered for token in (
+        "starting scanner",
+        "daily scan",
+        "backtest",
+        "scan date",
+        "evaluating until",
+        "[flow]",
+        "[prices]",
+        "bhavcopy",
+        "checking exit",
+        "fetching catalyst",
+        "loading nse",
+        "done. loaded from cache",
+        "llm gate",
+        "grok batch validation",
+        "grok:",
+        "results:",
+        "html report saved",
+        "scanner completed",
+        "scanner failed",
+        "traceback",
+        "error",
+        "exception",
+        "modulenotfound",
+    ))
+
+
+def _log_scan_line(job_id: str, line: str) -> None:
+    if _should_log_scan_line(line):
+        print(f"[scan:{job_id}] {line.strip()}", flush=True)
+
+
+def _last_useful_error(lines: list[str]) -> str:
+    for line in reversed(lines):
+        clean = line.strip()
+        if not clean:
+            continue
+        lowered = clean.lower()
+        if any(token in lowered for token in ("traceback", "error", "exception", "modulenotfound", "permission denied", "failed")):
+            return clean[-240:]
+    for line in reversed(lines):
+        clean = line.strip()
+        if clean and not any(pattern.search(clean) for pattern in NOISY_MESSAGE_PATTERNS):
+            return clean[-240:]
+    return ""
+
+
 def public_message(line: str, fallback: str) -> str:
     clean = line.strip()
     if not clean:
         return fallback
     if any(pattern.search(clean) for pattern in NOISY_MESSAGE_PATTERNS):
         return fallback
-    if "grok batch validation" in clean.lower():
-        return "Validating selected stocks with Grok..."
-    if "gemini validation" in clean.lower():
-        return "Validating selected stocks with Gemini..."
-    if "llm gate" in clean.lower():
-        return "Selecting top-ranked stocks for AI review..."
-    if "loading nse" in clean.lower() or "loading ohlcv" in clean.lower():
+    lowered = clean.lower()
+
+    if "starting scanner" in lowered:
+        return "Starting the scan..."
+    if "scan date" in lowered:
+        return "Preparing market data for the selected date..."
+    if "bhavcopy" in lowered:
+        return "Loading NSE daily market data..."
+    if "checking exit" in lowered or "[prices]" in lowered:
+        return "Checking latest prices and open positions..."
+    if "loading nse" in lowered or "loading ohlcv" in lowered:
         return "Scanning NSE universe..."
-    if "done. loaded from cache" in clean.lower():
-        return "Technical scan completed. Preparing AI validation..."
-    return clean[-180:]
+    if "done. loaded from cache" in lowered:
+        return "Technical scan completed. Preparing AI review..."
+    if "llm gate" in lowered:
+        return "Selecting top-ranked stocks for AI review..."
+    if "grok" in lowered:
+        return "AI review is checking the selected stocks..."
+    if "gemini" in lowered:
+        return "AI review is checking the selected stocks..."
+    if "phase ohlcv-bulk-load started" in lowered:
+        return "Loading one-year price history from database..."
+    if "phase ohlcv-bulk-load completed" in lowered:
+        return "Price history loaded. Filtering NSE universe..."
+    if "phase technical-scan started" in lowered:
+        return "Filtering technical and news-driven candidates..."
+    if "phase technical-scan completed" in lowered:
+        return "Candidate filtering completed. Preparing AI review..."
+    if "phase llm-validation started" in lowered:
+        return "Validating selected stocks with AI..."
+    if "phase llm-validation completed" in lowered:
+        return "AI review completed. Saving the report..."
+    if "phase save-breakout-log started" in lowered:
+        return "Saving scan results..."
+    if "results:" in lowered:
+        return "Finalizing recommended stocks..."
+    if "html report saved" in lowered:
+        return "Report generated successfully."
+    if "scanner completed" in lowered or "daily scan completed" in lowered:
+        return "Scan completed."
+    if "scanner failed" in lowered or "traceback" in lowered or "error" in lowered or "exception" in lowered:
+        return "Scan failed. Please check backend logs for technical details."
+    if clean.startswith("[") or "=" in clean or "model=" in lowered:
+        return fallback
+    return fallback
 
 
 @dataclass
@@ -73,6 +175,7 @@ class ScanJob:
         clean = line.rstrip("\r\n")
         if not clean:
             return
+        _log_scan_line(self.id, clean)
         self.lines.append(clean)
         if len(self.lines) > 2000:
             self.lines = self.lines[-2000:]
@@ -133,7 +236,7 @@ class ScannerJobManager:
                     return job
 
             job_id = uuid.uuid4().hex[:12]
-            command = [scanner_python(), "main.py", "scan"]
+            command = [scanner_python(), "scanner_main.py", "scan"]
             if scan_date:
                 command.extend(["--date", scan_date])
             if force_refresh:
@@ -181,12 +284,16 @@ class ScannerJobManager:
             else:
                 job.status = "failed"
                 job.progress = max(job.progress, 95)
-                job.append(f"Scanner failed with exit code {job.exit_code}.")
+                detail = _last_useful_error(job.lines)
+                suffix = f" Last error: {detail}" if detail else ""
+                job.append(f"Scanner failed with exit code {job.exit_code}.{suffix}")
+                job.message = "Scan failed. Please check backend logs for technical details."
         except Exception as exc:
             job.status = "failed"
             job.ended_at = datetime.now().isoformat(timespec="seconds")
             job.exit_code = -1
             job.append(f"Scanner failed: {exc}")
+            job.message = "Scan failed. Please check backend logs for technical details."
 
     def get(self, job_id: str) -> ScanJob | None:
         with self._lock:
@@ -208,6 +315,6 @@ def sse_event(event: str, payload: dict[str, Any]) -> str:
 
 
 def ensure_agent_root() -> Path:
-    if not (AGENT_ROOT / "main.py").exists():
+    if not (AGENT_ROOT / "scanner_main.py").exists():
         raise RuntimeError(f"Scanner project root not found: {AGENT_ROOT}")
     return AGENT_ROOT

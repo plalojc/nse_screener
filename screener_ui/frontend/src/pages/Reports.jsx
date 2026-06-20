@@ -47,6 +47,31 @@ export function Reports({ user }) {
     setLoadedDate(selectedDate);
   }
 
+  async function downloadSelectedReport() {
+    if (!selected || !user?.is_admin) return;
+    setMessage("");
+    const response = await fetch(reportDownloadUrl(selected));
+    if (!response.ok) {
+      let detail = response.statusText || "Download failed";
+      try {
+        const payload = await response.json();
+        detail = payload.detail || detail;
+      } catch {
+        // keep HTTP status text
+      }
+      throw new Error(detail);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `NSE-Breakout-${selected.date}.html`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const selectedHtmlKey = reportHtmlCacheKey(selected);
   const selectedHtml = selectedHtmlKey ? cache[selectedHtmlKey]?.data : "";
   const selectedHtmlLoading = selectedHtmlKey ? cache[selectedHtmlKey]?.loading : false;
@@ -83,10 +108,14 @@ export function Reports({ user }) {
           <button onClick={loadSelectedReport} disabled={!selectedDate}>
             <FileSearch size={16} />Get Report
           </button>
-          {selected && (
-            <a className="downloadBtn" href={reportDownloadUrl(selected)}>
+          {selected && user?.is_admin && (
+            <button
+              type="button"
+              className="downloadBtn"
+              onClick={() => downloadSelectedReport().catch((err) => setMessage(err.message))}
+            >
               <Download size={16} />Download HTML
-            </a>
+            </button>
           )}
           {selected && user?.is_admin && (
             <button className="iconDanger reportDeleteBtn" onClick={() => setDeleteTarget(selected)}>

@@ -5,7 +5,7 @@ A focused NSE equity breakout scanner.
 The project now uses only:
 
 - NSE Bhavcopy for NSE instruments/OHLCV data
-- Gemini or Grok to validate trade signals
+- Grok to validate trade signals
 - SQLite by default, with optional Postgres for larger multi-year history
 - HTML reports for scan and backtest output
 
@@ -48,21 +48,13 @@ copy env.example .env
 Edit `.env` and set:
 
 ```env
-LLM_VALIDATOR=gemini
-GEMINI_VALIDATOR_API_KEY=...
-LLM_VALIDATION_LIMIT=100
-```
-
-For Grok:
-
-```env
 LLM_VALIDATOR=grok
 XAI_API_KEY=...
 LLM_VALIDATION_LIMIT=100
 ```
 
 `LLM_VALIDATION_LIMIT` controls how many top locally ranked stocks are sent to
-Gemini or Grok. Set it to `0` to validate every signal.
+Grok. Set it to `0` to validate every signal.
 
 Run a scan:
 
@@ -156,14 +148,13 @@ Combined launcher commands:
    - News-driven names come from cached catalyst events such as results, deals, order wins, approvals, or government policy themes.
    - Technical signals with a direct or mapped catalyst are boosted within their own priority bucket before LLM selection.
 6. Rank signals locally and validate only the top `LLM_VALIDATION_LIMIT` stocks with the configured LLM validator.
-   - Gemini validates per signal with Google Search grounding.
    - Grok validates compact batches through xAI's OpenAI-compatible API.
 7. Save signal history to the configured database.
 8. Print candidates, top picks, portfolio entries, and an HTML report.
 
 ## Notes
 
-- Gemini and Grok are the supported decision engines.
+- Grok is the default decision engine.
 - SQLite is the zero-config default. For heavier history, set `DATABASE_URL` to use Postgres.
 - In Postgres mode, common scanner/market tables are created in the `system` schema, and user-owned tables are created in the `app_user` schema by default.
 - Local SQLite DB files are runtime artifacts and are ignored by Git. HTML

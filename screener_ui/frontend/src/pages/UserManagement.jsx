@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { KeyRound, Plus, Trash2 } from "lucide-react";
+import { Ban, CheckCircle2, KeyRound, Plus, Trash2 } from "lucide-react";
 import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
 import { PageTitle } from "../components/PageTitle.jsx";
@@ -28,6 +28,16 @@ export function UserManagement() {
     if (!window.confirm(`Delete user ${email}?`)) return;
     await api(`/api/auth/users/${encodeURIComponent(email)}`, { method: "DELETE" });
     setMessage(`${email} deleted.`);
+    refresh();
+  }
+
+  async function toggleUser(user) {
+    const disabled = !user.disabled;
+    await api(`/api/auth/users/${encodeURIComponent(user.email)}/disabled`, {
+      method: "PUT",
+      body: JSON.stringify({ disabled })
+    });
+    setMessage(`${user.email} ${disabled ? "disabled" : "enabled"}.`);
     refresh();
   }
 
@@ -70,6 +80,7 @@ export function UserManagement() {
             <tr>
               <th>Email</th>
               <th>Role</th>
+              <th>Status</th>
               <th>New Password</th>
               <th>Action</th>
             </tr>
@@ -79,6 +90,7 @@ export function UserManagement() {
               <tr key={user.email}>
                 <td><strong>{user.email}</strong></td>
                 <td>{user.is_admin ? "Admin" : "User"}</td>
+                <td>{user.disabled ? "Disabled" : "Active"}</td>
                 <td>
                   <input
                     className="tableInput"
@@ -99,9 +111,19 @@ export function UserManagement() {
                       <KeyRound size={14} />Set
                     </button>
                     {!user.is_admin && (
-                      <button type="button" className="iconDanger" onClick={() => deleteUser(user.email)}>
-                        <Trash2 size={16} />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="smallBtn actionBtn"
+                          onClick={() => toggleUser(user)}
+                        >
+                          {user.disabled ? <CheckCircle2 size={14} /> : <Ban size={14} />}
+                          {user.disabled ? "Enable" : "Disable"}
+                        </button>
+                        <button type="button" className="iconDanger" onClick={() => deleteUser(user.email)}>
+                          <Trash2 size={16} />
+                        </button>
+                      </>
                     )}
                   </div>
                 </td>

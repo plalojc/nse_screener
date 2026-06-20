@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse
 
 from ..auth import current_user, require_admin, verify_token
-from ..reports import delete_report, list_reports, render_report
+from ..reports import build_report_download_file, delete_report, list_reports, render_report
 
 
 router = APIRouter(prefix="/reports")
@@ -35,18 +35,20 @@ def report_content(report_date: str, kind: str = Query("scan"), token: str | Non
 
 
 @router.get("/{report_date}/download")
-def report_download(report_date: str, kind: str = Query("scan"), token: str | None = None) -> Response:
+def report_download(report_date: str, kind: str = Query("scan"), token: str | None = None) -> FileResponse:
     user = _require_report_token(token)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
     if kind != "scan":
         raise HTTPException(status_code=404, detail="Report not found")
-    html = render_report(report_date, user.email)
-    if not html:
+    file_path = build_report_download_file(report_date, user.email)
+    if not file_path:
         raise HTTPException(status_code=404, detail="Report not found")
     filename = f"NSE-Breakout-{report_date}.html"
-    return Response(
-        content=html,
+    return FileResponse(
+        path=file_path,
         media_type="text/html",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        filename=filename,
     )
 
 

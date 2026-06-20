@@ -4,7 +4,7 @@
 # ============================================================
 from data.database      import (get_open_positions, close_position,
                                  save_signal, update_trailing_stop)
-from data.nse_bhavcopy_client import fetch_historical
+from data.nse_bhavcopy_client import fetch_historical, load_ohlcv_bulk
 from analysis.technical import add_indicators
 from config import (PROFIT_TARGET_PCT, STOP_LOSS_PCT,
                     MAX_HOLD_DAYS, ATR_TRAIL_MULTIPLIER)
@@ -40,28 +40,34 @@ def check_exit_signals():
     if not positions:
         return exits
 
-    print("  [Prices] Using latest NSE Bhavcopy close for open positions.")
+    total_positions = len(positions)
+    print(f"  [Prices] Using latest NSE Bhavcopy close for {total_positions} open position(s).")
+    symbols = [str(pos["symbol"]).upper().strip() for pos in positions]
+    ohlcv_by_symbol = load_ohlcv_bulk(symbols)
+    print(f"  [Prices] Loaded OHLCV for {len(ohlcv_by_symbol)}/{total_positions} open position(s).")
 
-    for pos in positions:
-        symbol    = pos["symbol"]
+    for idx, pos in enumerate(positions, 1):
+        symbol    = str(pos["symbol"]).upper().strip()
         buy_price = pos["buy_price"]
         buy_date  = datetime.strptime(pos["buy_date"], "%Y-%m-%d").date()
         days_held = (date.today() - buy_date).days
 
-        current_price = _get_current_price(symbol)
-        if current_price is None:
+        print(f"  [Prices] Checking open position {idx}/{total_positions}: {symbol}")
+        df_ind = ohlcv_by_symbol.get(symbol)
+        if df_ind is None:
+            df_ind = pd.DataFrame()
+        if df_ind.empty:
             print(f"  [WARN] Could not get price for {symbol}, skipping.")
             continue
+        current_price = float(df_ind["close"].iloc[-1])
 
         pnl_pct = (current_price - buy_price) / buy_price * 100
 
         # Compute ATR14 from latest historical data (always needed for trailing stop).
-        df_ind = fetch_historical(symbol)
         atr14  = None
-        if not df_ind.empty:
-            df_ind = add_indicators(df_ind)
-            atr_val = df_ind["atr14"].iloc[-1]
-            atr14   = float(atr_val) if atr_val is not None and not pd.isna(atr_val) else None
+        df_ind = add_indicators(df_ind)
+        atr_val = df_ind["atr14"].iloc[-1]
+        atr14   = float(atr_val) if atr_val is not None and not pd.isna(atr_val) else None
 
         # Ratchet trailing stop upward.
         if atr14 and atr14 > 0:
@@ -103,6 +109,7 @@ def check_exit_signals():
             })
             print(f"[EXIT] {symbol} @ Rs.{current_price:.2f}  {reason}")
 
+    print(f"  [Prices] Exit check complete for {total_positions} open position(s).")
     return exits
 
 

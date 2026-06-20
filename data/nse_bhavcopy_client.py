@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import contextlib
+import re
 
 import pandas as pd
 
@@ -53,11 +55,29 @@ def init_bhavcopy_db():
             date       TEXT PRIMARY KEY,
             file_path  TEXT,
             status     TEXT NOT NULL,
+            row_count  INTEGER DEFAULT 0,
             message    TEXT,
             fetched_at {timestamp_default}
         )
     """)
+    if is_postgres():
+        execute(conn, f"ALTER TABLE {T_BHAVCOPY_FILES} ADD COLUMN IF NOT EXISTS row_count INTEGER DEFAULT 0")
+    else:
+        with contextlib.suppress(Exception):
+            execute(conn, f"ALTER TABLE {T_BHAVCOPY_FILES} ADD COLUMN row_count INTEGER DEFAULT 0")
     execute(conn, f"CREATE INDEX IF NOT EXISTS idx_bhavcopy_symbol_date ON {T_BHAVCOPY_OHLCV}(symbol, date)")
+    rows = execute(
+        conn,
+        f"SELECT date, message FROM {T_BHAVCOPY_FILES} WHERE COALESCE(row_count, 0)=0 AND status='OK'",
+    ).fetchall()
+    for row in rows:
+        match = re.search(r"(\d+)\s+EQ rows", row["message"] or "")
+        if match:
+            execute(
+                conn,
+                f"UPDATE {T_BHAVCOPY_FILES} SET row_count=? WHERE date=?",
+                (int(match.group(1)), row["date"]),
+            )
     conn.commit()
     conn.close()
 
@@ -92,16 +112,17 @@ def _is_cached(conn, d: date) -> bool:
     return bool(row and row["status"] in ("OK", "FAILED"))
 
 
-def _record_status(conn, d: date, status: str, file_path: str = "", message: str = ""):
+def _record_status(conn, d: date, status: str, file_path: str = "", message: str = "", row_count: int = 0):
     execute(conn, f"""
-        INSERT INTO {T_BHAVCOPY_FILES} (date, file_path, status, message, fetched_at)
-        VALUES (?, ?, ?, ?, datetime('now'))
+        INSERT INTO {T_BHAVCOPY_FILES} (date, file_path, status, row_count, message, fetched_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(date) DO UPDATE SET
             file_path=excluded.file_path,
             status=excluded.status,
+            row_count=excluded.row_count,
             message=excluded.message,
             fetched_at=excluded.fetched_at
-    """, (d.isoformat(), file_path, status, message[:500]))
+    """, (d.isoformat(), file_path, status, int(row_count or 0), message[:500]))
 
 
 def _normalise_bhavcopy(df: pd.DataFrame, d: date) -> pd.DataFrame:
@@ -127,6 +148,38 @@ def _normalise_bhavcopy(df: pd.DataFrame, d: date) -> pd.DataFrame:
     return df.dropna(subset=["symbol", "open", "high", "low", "close"])
 
 
+def cleanup_bhavcopy_downloads() -> int:
+    """Remove temporary Bhavcopy download artifacts after data is stored in DB."""
+    out_dir = Path(NSE_BHAVCOPY_DIR)
+    if not out_dir.exists():
+        return 0
+    removed = 0
+    for path in out_dir.iterdir():
+        if path.is_file() and path.suffix.lower() in {".csv", ".zip"}:
+            with contextlib.suppress(OSError):
+                path.unlink()
+                removed += 1
+    return removed
+
+
+def get_bhavcopy_process_log(days: int = 30) -> pd.DataFrame:
+    """Return recent Bhavcopy processing records for audit/debug screens."""
+    init_bhavcopy_db()
+    conn = _get_conn()
+    df = read_dataframe(
+        conn,
+        f"""
+        SELECT date, status, row_count, message, fetched_at
+        FROM {T_BHAVCOPY_FILES}
+        ORDER BY date DESC
+        LIMIT ?
+        """,
+        params=(days,),
+    )
+    conn.close()
+    return df
+
+
 def _download_and_store(d: date) -> int:
     from jugaad_data.nse import bhavcopy_save
 
@@ -134,6 +187,7 @@ def _download_and_store(d: date) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     conn = _get_conn()
+    file_path: str | Path | None = None
     try:
         file_path = bhavcopy_save(d, str(out_dir))
         df = pd.read_csv(file_path)
@@ -145,15 +199,18 @@ def _download_and_store(d: date) -> int:
             clean,
             ["symbol", "date", "open", "high", "low", "close", "volume"],
         )
-        _record_status(conn, d, "OK", str(file_path), f"{len(clean)} EQ rows")
+        _record_status(conn, d, "OK", "", f"{len(clean)} EQ rows", row_count=len(clean))
         conn.commit()
         return len(clean)
     except Exception as exc:
-        _record_status(conn, d, "FAILED", "", str(exc))
+        _record_status(conn, d, "FAILED", "", str(exc), row_count=0)
         conn.commit()
         return 0
     finally:
         conn.close()
+        if file_path:
+            with contextlib.suppress(OSError):
+                Path(file_path).unlink()
 
 
 def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOOKBACK_DAYS, force_refresh: bool = False) -> str | None:
@@ -178,6 +235,9 @@ def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOO
         rows = _download_and_store(d)
         status = f"{rows} EQ rows" if rows else "not available"
         print(f"   [Bhavcopy {idx:>3}/{len(missing)}] {d.isoformat()} -> {status}")
+    removed = cleanup_bhavcopy_downloads()
+    if removed:
+        print(f"   Cleaned {removed} temporary Bhavcopy file(s).")
 
     return latest_cached_date(target.isoformat())
 

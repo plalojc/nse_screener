@@ -14,6 +14,21 @@ from config import (VOLUME_SURGE_FACTOR, RSI_BREAKOUT_MIN,
                     MIN_WATCHLIST_TURNOVER_CR, WATCHLIST_NEAR_HIGH_PCT)
 
 
+INDICATOR_COLUMNS = {
+    "ema20", "ema50", "ema200", "rsi", "vol_ratio", "atr14",
+    "high_20d", "high_55d", "high_52w", "turnover_cr",
+    "close_range_pos", "day_range_atr", "ema20_extension_pct",
+    "ema50_extension_pct", "macd_hist", "supertrend_dir",
+}
+
+
+def _ensure_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Reuse enriched OHLCV frames when the orchestrator already added indicators."""
+    if INDICATOR_COLUMNS.issubset(df.columns):
+        return df
+    return add_indicators(df)
+
+
 def find_swing_low(df: pd.DataFrame, lookback: int = 20) -> float | None:
     """
     Return the most recent local low within the last `lookback` bars.
@@ -118,6 +133,93 @@ def passes_stage1_prefilter(df: pd.DataFrame) -> bool:
     return 0 <= distance_pct <= STAGE1_NEAR_BREAKOUT_PCT
 
 
+def passes_pullback_prefilter(df: pd.DataFrame) -> bool:
+    """
+    Cheap gate for EMA50 pullback candidates.
+
+    The full pullback scanner needs all indicators, including ATR. This gate
+    calculates only EMA50/EMA200 and RSI so quiet symbols avoid the heavier
+    full-indicator path.
+    """
+    if len(df) < 200:
+        return False
+
+    close_series = pd.to_numeric(df["close"], errors="coerce")
+    low_series = pd.to_numeric(df["low"], errors="coerce")
+    high_series = pd.to_numeric(df["high"], errors="coerce")
+    volume_series = pd.to_numeric(df["volume"], errors="coerce")
+    close = close_series.iloc[-1]
+    low = low_series.iloc[-1]
+    high = high_series.iloc[-1]
+    volume = volume_series.iloc[-1]
+    if any(pd.isna(v) for v in (close, low, high, volume)):
+        return False
+    if not (MIN_PRICE <= close <= MAX_PRICE):
+        return False
+
+    turnover_cr = (close * volume) / 10_000_000
+    if turnover_cr < MIN_TURNOVER_CR:
+        return False
+
+    ema50 = close_series.ewm(span=50, adjust=False, min_periods=50).mean().iloc[-1]
+    ema200 = close_series.ewm(span=200, adjust=False, min_periods=200).mean().iloc[-1]
+    if pd.isna(ema50) or pd.isna(ema200) or ema50 <= ema200:
+        return False
+    if not (low <= ema50 <= close):
+        return False
+
+    delta = close_series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    rsi = (100 - (100 / (1 + rs))).iloc[-1]
+    return not pd.isna(rsi) and rsi < 48
+
+
+def passes_watchlist_prefilter(df: pd.DataFrame) -> bool:
+    """
+    Cheap gate for lower-priority AI-fill candidates.
+
+    It checks only raw OHLCV, liquidity, strong close, and proximity to recent
+    highs. Full indicators are calculated only after this passes.
+    """
+    if len(df) < 60:
+        return False
+
+    last = df.iloc[-1]
+    close = pd.to_numeric(last.get("close"), errors="coerce")
+    high = pd.to_numeric(last.get("high"), errors="coerce")
+    low = pd.to_numeric(last.get("low"), errors="coerce")
+    volume = pd.to_numeric(last.get("volume"), errors="coerce")
+    if any(pd.isna(v) for v in (close, high, low, volume)):
+        return False
+    if not (MIN_PRICE <= close <= MAX_PRICE):
+        return False
+
+    turnover_cr = (close * volume) / 10_000_000
+    if turnover_cr < MIN_WATCHLIST_TURNOVER_CR:
+        return False
+
+    day_range = high - low
+    if day_range <= 0:
+        return False
+    close_range_pos = (close - low) / day_range
+    if close_range_pos < 0.45:
+        return False
+
+    prior_high = pd.to_numeric(df["high"].shift(1), errors="coerce")
+    high_20d = prior_high.rolling(20).max().iloc[-1]
+    high_55d = prior_high.rolling(55).max().iloc[-1]
+    usable_highs = [h for h in (high_20d, high_55d) if not pd.isna(h) and h > 0]
+    if not usable_highs:
+        return False
+    trigger_high = min(usable_highs)
+    trigger_distance_pct = (trigger_high - close) / trigger_high * 100
+    return trigger_distance_pct <= WATCHLIST_NEAR_HIGH_PCT
+
+
 # == Breakout Scanner ==========================================================
 
 def is_breakout(df: pd.DataFrame) -> dict | None:
@@ -129,7 +231,7 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
     if len(df) < 60:
         return None
 
-    df    = add_indicators(df)
+    df    = _ensure_indicators(df)
     last  = df.iloc[-1]
     prev  = df.iloc[-2]
     close = last["close"]
@@ -330,7 +432,7 @@ def is_stage1_watchlist(df: pd.DataFrame) -> dict | None:
     if len(df) < 60:
         return None
 
-    df = add_indicators(df)
+    df = _ensure_indicators(df)
     last = df.iloc[-1]
     close = last["close"]
     stage = get_stage(df)
@@ -470,7 +572,7 @@ def is_llm_watchlist_candidate(df: pd.DataFrame) -> dict | None:
     if len(df) < 60:
         return None
 
-    df = add_indicators(df)
+    df = _ensure_indicators(df)
     last = df.iloc[-1]
     close = last["close"]
     stage = get_stage(df)
@@ -631,7 +733,7 @@ def is_ma_pullback(df: pd.DataFrame) -> dict | None:
     if len(df) < 60:       # need enough history for EMA200 to be meaningful
         return None
 
-    df   = add_indicators(df)
+    df   = _ensure_indicators(df)
     last = df.iloc[-1]
 
     close  = float(last["close"])
