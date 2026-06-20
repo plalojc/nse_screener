@@ -30,8 +30,12 @@ button {
   display: inline-flex;
   gap: 8px;
   justify-content: center;
+  max-width: 100%;
   min-height: 36px;
+  min-width: 0;
   padding: 8px 12px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 button:disabled {
@@ -362,6 +366,26 @@ select:focus {
 .inlineForm {
   grid-template-columns: 160px 160px 1fr auto;
   margin-bottom: 14px;
+}
+
+.userForm {
+  align-items: center;
+  grid-template-columns: minmax(190px, 270px) minmax(150px, 220px) auto;
+}
+
+.userForm button {
+  justify-self: start;
+  width: auto;
+}
+
+.hiddenAutofillField {
+  height: 0;
+  left: -9999px;
+  min-height: 0;
+  opacity: 0;
+  padding: 0;
+  position: absolute;
+  width: 0;
 }
 
 .holdingForm {
@@ -1005,7 +1029,7 @@ tr:hover .hoverActionCell .slAddBtn {
 .rowActions {
   align-items: center;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -1024,6 +1048,14 @@ tr:hover .hoverActionCell .slAddBtn {
   min-height: 26px;
   min-width: 62px;
   padding: 4px 8px;
+}
+
+.userTable .rowActions {
+  justify-content: flex-start;
+}
+
+.userTable .tableInput {
+  min-width: 140px;
 }
 
 .actionBtn {
@@ -1279,6 +1311,13 @@ tr:hover .hoverActionCell .slAddBtn {
   .reportToolbar,
   .settingsForm {
     grid-template-columns: 1fr;
+  }
+
+  .inlineForm button,
+  .holdingForm button,
+  .sellForm button {
+    justify-content: center;
+    width: 100%;
   }
 
   .reportsPage {
@@ -1758,10 +1797,13 @@ tr:hover .hoverActionCell .slAddBtn {
   }
 
   .modalActions button,
-  .rowActions button,
   .inlineForm button,
   .holdingForm button,
   .sellForm button {
     width: 100%;
+  }
+
+  .rowActions button {
+    width: auto;
   }
 }

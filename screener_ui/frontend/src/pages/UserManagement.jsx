@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Ban, CheckCircle2, KeyRound, Plus, Trash2 } from "lucide-react";
 import { api } from "../api.js";
 import { Notice } from "../components/Notice.jsx";
@@ -12,68 +12,131 @@ export function UserManagement() {
   const [form, setForm] = useState({ email: "", password: "" });
   const [passwords, setPasswords] = useState({});
   const [message, setMessage] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busyAction, setBusyAction] = useState("");
+  const addFormRef = useRef(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setForm({ email: "", password: "" });
+      addFormRef.current?.reset();
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   async function addUser(event) {
     event.preventDefault();
-    const user = await api("/api/auth/users", {
-      method: "POST",
-      body: JSON.stringify(form)
-    });
-    setForm({ email: "", password: "" });
-    setMessage(`${user.email} added.`);
-    refresh();
+    const formData = new FormData(event.currentTarget);
+    const email = String(formData.get("new-user-email") || form.email).trim().toLowerCase();
+    const password = String(formData.get("new-user-password") || form.password);
+    if (!email || !password) return;
+    setBusyAction("add");
+    setActionError("");
+    try {
+      const user = await api("/api/auth/users", {
+        method: "POST",
+        body: JSON.stringify({ email, password })
+      });
+      setForm({ email: "", password: "" });
+      setMessage(`${user.email} added.`);
+      refresh();
+    } catch (err) {
+      setActionError(err.message || "Could not add user.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function deleteUser(email) {
     if (!window.confirm(`Delete user ${email}?`)) return;
-    await api(`/api/auth/users/${encodeURIComponent(email)}`, { method: "DELETE" });
-    setMessage(`${email} deleted.`);
-    refresh();
+    const actionKey = `delete:${email}`;
+    setBusyAction(actionKey);
+    setActionError("");
+    try {
+      await api(`/api/auth/users/${encodeURIComponent(email)}`, { method: "DELETE" });
+      setMessage(`${email} deleted.`);
+      refresh();
+    } catch (err) {
+      setActionError(err.message || "Could not delete user.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function toggleUser(user) {
     const disabled = !user.disabled;
-    await api(`/api/auth/users/${encodeURIComponent(user.email)}/disabled`, {
-      method: "PUT",
-      body: JSON.stringify({ disabled })
-    });
-    setMessage(`${user.email} ${disabled ? "disabled" : "enabled"}.`);
-    refresh();
+    const actionKey = `toggle:${user.email}`;
+    setBusyAction(actionKey);
+    setActionError("");
+    try {
+      await api(`/api/auth/users/${encodeURIComponent(user.email)}/disabled`, {
+        method: "PUT",
+        body: JSON.stringify({ disabled })
+      });
+      setMessage(`${user.email} ${disabled ? "disabled" : "enabled"}.`);
+      refresh();
+    } catch (err) {
+      setActionError(err.message || "Could not update user.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function resetPassword(email) {
     const password = passwords[email] || "";
     if (!password) return;
-    await api(`/api/auth/users/${encodeURIComponent(email)}/password`, {
-      method: "PUT",
-      body: JSON.stringify({ password })
-    });
-    setPasswords((current) => ({ ...current, [email]: "" }));
-    setMessage(`${email} password updated.`);
+    const actionKey = `password:${email}`;
+    setBusyAction(actionKey);
+    setActionError("");
+    try {
+      await api(`/api/auth/users/${encodeURIComponent(email)}/password`, {
+        method: "PUT",
+        body: JSON.stringify({ password })
+      });
+      setPasswords((current) => ({ ...current, [email]: "" }));
+      setMessage(`${email} password updated.`);
+    } catch (err) {
+      setActionError(err.message || "Could not update password.");
+    } finally {
+      setBusyAction("");
+    }
   }
 
   return (
     <section>
       <PageTitle title="User Management" />
       {error && <Notice tone="danger">{error}</Notice>}
+      {actionError && <Notice tone="danger">{actionError}</Notice>}
       <Toast message={message} onClose={() => setMessage("")} />
       <div className="panel">
-        <form className="inlineForm userForm" onSubmit={addUser}>
+        <form ref={addFormRef} className="inlineForm userForm" onSubmit={addUser} autoComplete="off">
+          <input type="text" name="fake-login-email" autoComplete="username" tabIndex="-1" aria-hidden="true" className="hiddenAutofillField" />
+          <input type="password" name="fake-login-password" autoComplete="current-password" tabIndex="-1" aria-hidden="true" className="hiddenAutofillField" />
           <input
             type="email"
+            name="new-user-email"
             placeholder="Email"
             value={form.email}
             onChange={(event) => setForm({ ...form, email: event.target.value })}
+            autoComplete="section-add-user off"
+            data-lpignore="true"
+            data-1p-ignore="true"
             required
           />
           <input
             type="password"
+            name="new-user-password"
             placeholder="Password"
             value={form.password}
             onChange={(event) => setForm({ ...form, password: event.target.value })}
+            autoComplete="section-add-user new-password"
+            data-lpignore="true"
+            data-1p-ignore="true"
             required
           />
-          <button type="submit"><Plus size={16} />Add User</button>
+          <button type="submit" disabled={busyAction === "add"}>
+            <Plus size={16} />{busyAction === "add" ? "Adding..." : "Add User"}
+          </button>
         </form>
         <table className="holdingsTable userTable">
           <thead>
@@ -95,9 +158,11 @@ export function UserManagement() {
                   <input
                     className="tableInput"
                     type="password"
+                    name={`reset-password-${user.email}`}
                     placeholder="New password"
                     value={passwords[user.email] || ""}
                     onChange={(event) => setPasswords({ ...passwords, [user.email]: event.target.value })}
+                    autoComplete="new-password"
                   />
                 </td>
                 <td>
@@ -106,7 +171,7 @@ export function UserManagement() {
                       type="button"
                       className="smallBtn actionBtn"
                       onClick={() => resetPassword(user.email)}
-                      disabled={!passwords[user.email]}
+                      disabled={!passwords[user.email] || busyAction === `password:${user.email}`}
                     >
                       <KeyRound size={14} />Set
                     </button>
@@ -116,11 +181,17 @@ export function UserManagement() {
                           type="button"
                           className="smallBtn actionBtn"
                           onClick={() => toggleUser(user)}
+                          disabled={busyAction === `toggle:${user.email}`}
                         >
                           {user.disabled ? <CheckCircle2 size={14} /> : <Ban size={14} />}
                           {user.disabled ? "Enable" : "Disable"}
                         </button>
-                        <button type="button" className="iconDanger" onClick={() => deleteUser(user.email)}>
+                        <button
+                          type="button"
+                          className="iconDanger"
+                          onClick={() => deleteUser(user.email)}
+                          disabled={busyAction === `delete:${user.email}`}
+                        >
                           <Trash2 size={16} />
                         </button>
                       </>
