@@ -8,7 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from data.database import init_db
 from .routes import auth, backup, bootstrap, dashboard, portfolio, reports, scan, scheduler as scheduler_routes, settings as settings_routes
 from .auth import ensure_admin_user
-from .runtime import apply_schedule, scheduler
+from .runtime import apply_schedule, run_due_schedule_check, scheduler
 from .scanner_runner import ensure_agent_root
 from .settings import UI_ROOT
 from .store import get_setting, init_store
@@ -58,6 +58,7 @@ def startup() -> None:
     scan_time = get_setting("scheduler_time", "08:20")
     if enabled:
         apply_schedule(scan_time)
+        run_due_schedule_check()
 
 
 @app.on_event("shutdown")

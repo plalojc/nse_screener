@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,7 @@ from ..scanner_runner import public_message, sse_event
 
 
 router = APIRouter(prefix="/scan")
+IST = ZoneInfo("Asia/Kolkata")
 
 
 class ScanRequest(BaseModel):
@@ -39,13 +41,12 @@ def _expired_job(job_id: str) -> dict[str, Any]:
 def _effective_report_date(scan_date: str | None) -> str:
     if scan_date:
         target = datetime.strptime(scan_date, "%Y-%m-%d").date()
+        while target.weekday() >= 5:
+            target -= timedelta(days=1)
+        return target.isoformat()
     else:
-        now = datetime.now()
-        target = date.today() if now.hour >= 17 else date.today() - timedelta(days=1)
-
-    today = date.today()
-    if target >= today and datetime.now().hour < 17:
-        target = today - timedelta(days=1)
+        now = datetime.now(IST)
+        target = now.date() if now.hour >= 17 else now.date() - timedelta(days=1)
 
     while target.weekday() >= 5:
         target -= timedelta(days=1)

@@ -102,14 +102,19 @@ def _weekdays_between(start: date, end: date):
         cur += timedelta(days=1)
 
 
-def _is_cached(conn, d: date) -> bool:
+def _is_cached(conn, d: date, target: date | None = None) -> bool:
     row = execute(
         conn,
         f"SELECT status FROM {T_BHAVCOPY_FILES} WHERE date=?",
         (d.isoformat(),),
     ).fetchone()
-    # Accept both OK and FAILED as 'already processed' to prevent infinite holiday loops
-    return bool(row and row["status"] in ("OK", "FAILED"))
+    if not row:
+        return False
+    if row["status"] == "OK":
+        return True
+    # Keep old failed dates cached to avoid retrying every market holiday in the lookback.
+    # Always retry the requested target date; it may have failed before NSE published it.
+    return row["status"] == "FAILED" and target is not None and d != target
 
 
 def _record_status(conn, d: date, status: str, file_path: str = "", message: str = "", row_count: int = 0):
@@ -180,6 +185,22 @@ def get_bhavcopy_process_log(days: int = 30) -> pd.DataFrame:
     return df
 
 
+def get_bhavcopy_status(scan_date: str) -> dict | None:
+    init_bhavcopy_db()
+    conn = _get_conn()
+    row = execute(
+        conn,
+        f"""
+        SELECT date, status, row_count, message, fetched_at
+        FROM {T_BHAVCOPY_FILES}
+        WHERE date=?
+        """,
+        (scan_date,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def _download_and_store(d: date) -> int:
     from jugaad_data.nse import bhavcopy_save
 
@@ -225,7 +246,7 @@ def update_bhavcopy_cache(scan_date: str | None = None, lookback_days: int = LOO
     conn = _get_conn()
     missing = [
         d for d in _weekdays_between(start, target) 
-        if (force_refresh and d == target) or not _is_cached(conn, d)
+        if (force_refresh and d == target) or not _is_cached(conn, d, target)
     ]
     conn.close()
 

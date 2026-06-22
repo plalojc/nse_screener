@@ -4,6 +4,7 @@
 # ============================================================
 import time
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from tabulate import tabulate
 from colorama import Fore, Style, init
 
@@ -13,7 +14,7 @@ from data.database       import (init_db, save_signal,
                                   get_invalid_symbols, add_invalid_instrument)
 from data.nse_bhavcopy_client import fetch_nse_instruments as fetch_bhavcopy_instruments
 from data.nse_bhavcopy_client import load_ohlcv_bulk as load_bhavcopy_ohlcv_bulk
-from data.nse_bhavcopy_client import update_bhavcopy_cache
+from data.nse_bhavcopy_client import get_bhavcopy_status, update_bhavcopy_cache
 from analysis.breakout_scanner import (
     is_breakout,
     is_llm_watchlist_candidate,
@@ -42,6 +43,8 @@ from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATION_LIMIT,
                     MAX_CATALYST_CANDIDATES)
 
 init(autoreset=True)
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _flow(message: str) -> None:
@@ -196,11 +199,11 @@ def _effective_scan_date(scan_date: str = None) -> str:
     else:
         # Check current hour. If it's 5 PM (17:00) or later, look for today's file.
         # Otherwise, default to yesterday.
-        now = datetime.now() 
+        now = datetime.now(IST)
         if now.hour >= 17:
-            d = date.today()
+            d = now.date()
         else:
-            d = date.today() - timedelta(days=1)
+            d = now.date() - timedelta(days=1)
             
     while d.weekday() >= 5:          # skip Sat(5) / Sun(6)
         d -= timedelta(days=1)
@@ -226,6 +229,7 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     print(Fore.CYAN + "=" * 60)
 
     target_date = _effective_scan_date(scan_date)
+    requested_target_date = target_date
     print(Fore.CYAN + f"   Scan date : {target_date}")
     print(Fore.CYAN + "   Data      : NSE Bhavcopy")
     print(Fore.CYAN + f"   Signals   : {', '.join(sorted(SCAN_SIGNAL_TYPES)) or 'BREAKOUT'}")
@@ -243,6 +247,14 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     if not latest:
         print(Fore.RED + "   [ERROR] Could not load NSE Bhavcopy data. Aborting scan.")
         return []
+    if scan_date and latest != requested_target_date:
+        status = get_bhavcopy_status(requested_target_date) or {}
+        detail = status.get("message") or "No failure detail recorded."
+        raise RuntimeError(
+            f"Bhavcopy is not available for requested scan date {requested_target_date}. "
+            f"Latest available trading date is {latest}; scan was not run for an older date. "
+            f"Download detail: {detail}"
+        )
     target_date = latest
     print(Fore.CYAN + f"   Bhavcopy  : using cached trading date {target_date}")
     _flow(f"Phase bhavcopy-cache completed in {_elapsed(phase_started)}")
