@@ -46,7 +46,7 @@ def load_report_signals(report_date: str) -> list[dict[str, Any]]:
             )
             SELECT b.scan_date, b.symbol, b.signal_type, b.close, b.rsi,
                    b.vol_ratio, b.score, b.stage, b.ema20, b.ema50, b.atr14,
-                   b.swing_low, b.reasons,
+                   b.swing_low, b.reasons, b.rs_rating,
                    COALESCE(le.verdict, b.llm_verdict) AS llm_verdict,
                    COALESCE(le.confidence, b.llm_confidence) AS llm_confidence,
                    COALESCE(le.reasoning, b.llm_reasoning) AS llm_reasoning,

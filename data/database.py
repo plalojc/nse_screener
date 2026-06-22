@@ -118,12 +118,14 @@ def init_db():
             catalyst_confidence INTEGER,
             catalyst_theme      TEXT,
             catalyst_mapping_source TEXT,
+            rs_rating           REAL,
             created_at          {now_default},
             UNIQUE(scan_date, symbol)
         )
     """)
     for col, typedef in [
         ("swing_low", "REAL"),
+        ("rs_rating", "REAL"),
         ("llm_verdict", "TEXT"),
         ("llm_confidence", "INTEGER"),
         ("llm_reasoning", "TEXT"),
@@ -345,6 +347,7 @@ def _breakout_log_row(scan_date: str, sig: dict) -> tuple:
         sig.get("catalyst_confidence"),
         sig.get("catalyst_theme"),
         sig.get("catalyst_mapping_source"),
+        sig.get("rs_rating"),
     )
 
 
@@ -383,8 +386,9 @@ def save_breakout_logs(scan_date: str, signals: list[dict]) -> int:
              llm_verdict, llm_confidence, llm_reasoning,
              panel_method, llm_model, vcp_detected, bull_flag_detected, pattern_score,
              catalyst_category, catalyst_summary, catalyst_source, catalyst_url,
-             catalyst_score, catalyst_confidence, catalyst_theme, catalyst_mapping_source)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             catalyst_score, catalyst_confidence, catalyst_theme, catalyst_mapping_source,
+             rs_rating)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(scan_date, symbol) DO UPDATE SET
             signal_type = excluded.signal_type,
             close       = excluded.close,
@@ -432,7 +436,8 @@ def save_breakout_logs(scan_date: str, signals: list[dict]) -> int:
             catalyst_score     = COALESCE(excluded.catalyst_score, {existing}catalyst_score),
             catalyst_confidence = COALESCE(excluded.catalyst_confidence, {existing}catalyst_confidence),
             catalyst_theme     = COALESCE(excluded.catalyst_theme, {existing}catalyst_theme),
-            catalyst_mapping_source = COALESCE(excluded.catalyst_mapping_source, {existing}catalyst_mapping_source)
+            catalyst_mapping_source = COALESCE(excluded.catalyst_mapping_source, {existing}catalyst_mapping_source),
+            rs_rating          = COALESCE(excluded.rs_rating, {existing}rs_rating)
     """
     breakout_rows = [_breakout_log_row(scan_date, sig) for sig in signals]
     for chunk in _chunks(breakout_rows):

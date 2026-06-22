@@ -3,21 +3,17 @@ report/html_report_writer.py
 ============================
 Renders the final list of qualifying signals to HTML.
 
-Sorted by score descending (highest-conviction first).
+The table is intentionally minimal for a non-expert reader. Internal/technical
+fields (stage, RSI, volume ratio, ATR, raw score, signal type) are used for
+ranking but NOT shown.
 
 Columns rendered:
-  1. SL          - serial number
-  2. Symbol      - clickable (opens TradingView NSE chart)
-  3. Signal      - BREAKOUT / PULLBACK
-  4. Stage       - Stage1 / Stage2 / Stage3
-  5. Close (Rs.)  - today's closing price
-  6. RSI         - RSI-14 (colour-coded)
-  7. Vol          - volume ratio vs 20-day avg (colour-coded)
-  8. ATR14       - average true range (volatility context)
-  9. Score       - multi-factor score (colour-coded)
- 10. LLM Verdict - CONFIRM / WEAK / REJECT / SKIPPED (colour-coded)
- 11. LLM Conf    - LLM confidence 0-10
- 12. AI Reasoning - short reasoning text from LLM
+  1. SL             - serial number (+ add-to-watchlist button on hover)
+  2. Symbol         - clickable (opens TradingView NSE chart)
+  3. Price (Rs.)    - latest closing price
+  4. Recommendation - CONFIRM / WEAK (colour-coded AI verdict)
+  5. Confidence     - AI confidence 0-10
+  6. Why            - short plain-English reasoning
 """
 
 from __future__ import annotations
@@ -56,6 +52,8 @@ _PAGE_HEAD = """\
         tr:nth-child(even) {{ background: #fbfcfe; }}
         tr:hover {{ background: #eef8f3; cursor: pointer; }}
         td.symbol {{ font-weight:700; letter-spacing:0; }}
+        td.symbol.clicked {{ color:#7c3aed; }}
+        td.symbol.clicked::after {{ content:" ✓"; font-size:10px; color:#7c3aed; }}
         td.reason {{ text-align: left; color: #3f4a5a; max-width: 260px; position:relative; }}
         .reasonPreview {{ display:block; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
         .reasonFull {{ display:none; position:fixed; right:16px; bottom:16px; z-index:20; width:min(420px, calc(100vw - 32px)); background:#111827; color:white; border-radius:4px; padding:9px 10px; box-shadow:0 10px 28px rgba(0,0,0,.25); line-height:1.35; text-align:left; }}
@@ -94,37 +92,59 @@ _PAGE_HEAD = """\
             table {{ table-layout:fixed; }}
             th, td {{ font-size:11px; padding:4px 5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
             .modalGrid {{ grid-template-columns:1fr; }}
-            table th:nth-child(8), table td:nth-child(8),
-            table th:nth-child(11), table td:nth-child(11),
-            table th:nth-child(12), table td:nth-child(12) {{ display:none; }}
-            table th:nth-child(1), table td:nth-child(1) {{ width:26px; }}
-            table th:nth-child(2), table td:nth-child(2) {{ width:30%; }}
-            table th:nth-child(5), table td:nth-child(5) {{ width:72px; }}
-            table th:nth-child(9), table td:nth-child(9) {{ width:48px; }}
-            table th:nth-child(10), table td:nth-child(10) {{ width:86px; }}
-            td.slCell {{ min-width:26px; width:26px; }}
+            /* Columns: 1 SL, 2 Symbol, 3 Price, 4 Recommendation, 5 Confidence, 6 Why */
+            table th:nth-child(1), table td:nth-child(1) {{ width:34px; }}
+            table th:nth-child(2), table td:nth-child(2) {{ width:24%; }}
+            table th:nth-child(3), table td:nth-child(3) {{ width:80px; }}
+            table th:nth-child(4), table td:nth-child(4) {{ width:120px; }}
+            table th:nth-child(5), table td:nth-child(5) {{ width:78px; }}
+            td.slCell {{ min-width:34px; width:34px; }}
             td.slCell .slNo {{ font-size:10px; }}
             .watch-btn {{ height:20px; width:20px; font-size:13px; }}
         }}
         @media (max-width:520px) {{
             body {{ margin:6px; }}
-            table th:nth-child(3), table td:nth-child(3),
-            table th:nth-child(4), table td:nth-child(4),
-            table th:nth-child(6), table td:nth-child(6),
-            table th:nth-child(7), table td:nth-child(7) {{ display:none; }}
-            table th:nth-child(1), table td:nth-child(1) {{ width:24px; }}
-            table th:nth-child(2), table td:nth-child(2) {{ width:31%; }}
-            table th:nth-child(5), table td:nth-child(5) {{ width:70px; }}
-            table th:nth-child(9), table td:nth-child(9) {{ width:46px; }}
-            table th:nth-child(10), table td:nth-child(10) {{ width:82px; }}
+            /* Hide Confidence on very small screens to keep Why readable */
+            table th:nth-child(5), table td:nth-child(5) {{ display:none; }}
+            table th:nth-child(1), table td:nth-child(1) {{ width:30px; }}
+            table th:nth-child(2), table td:nth-child(2) {{ width:30%; }}
+            table th:nth-child(3), table td:nth-child(3) {{ width:72px; }}
+            table th:nth-child(4), table td:nth-child(4) {{ width:96px; }}
             th, td {{ font-size:10.5px; padding:4px 3px; }}
-            td.slCell {{ min-width:24px; width:24px; }}
+            td.slCell {{ min-width:30px; width:30px; }}
             td.slCell .slNo {{ font-size:10px; }}
             .watch-btn {{ height:18px; width:18px; font-size:12px; }}
         }}
     </style>
     <script>
-        function openChart(symbol) {{
+        var CLICKED_KEY = "nse-clicked-{date}";
+        function loadClicked() {{
+            try {{ return JSON.parse(sessionStorage.getItem(CLICKED_KEY) || "[]"); }}
+            catch (e) {{ return []; }}
+        }}
+        function markClicked(symbol, cell) {{
+            if (cell) {{ cell.classList.add("clicked"); }}
+            try {{
+                var seen = loadClicked();
+                if (seen.indexOf(symbol) === -1) {{
+                    seen.push(symbol);
+                    sessionStorage.setItem(CLICKED_KEY, JSON.stringify(seen));
+                }}
+            }} catch (e) {{ /* session-only memory unavailable; ignore */ }}
+        }}
+        function restoreClicked() {{
+            var seen = loadClicked();
+            if (!seen.length) {{ return; }}
+            var cells = document.querySelectorAll("td.symbol");
+            for (var i = 0; i < cells.length; i++) {{
+                if (seen.indexOf(cells[i].getAttribute("data-symbol")) !== -1) {{
+                    cells[i].classList.add("clicked");
+                }}
+            }}
+        }}
+        window.addEventListener("DOMContentLoaded", restoreClicked);
+        function openChart(symbol, cell) {{
+            markClicked(symbol, cell);
             var base = "{tradingview_base}";
             var url = base + "?symbol=NSE:" + symbol;
             var left = (screen.width  / 2) - 600;
@@ -199,7 +219,7 @@ _PAGE_HEAD = """\
     <h2>&#x1F4C8; NSE EQ Breakout Report &ndash; {date}</h2>
     <p>
         {total} recommended signal(s) shown from {raw_total} candidate(s) &nbsp;|&nbsp;
-        Recommended first by local rank + LLM confidence &nbsp;|&nbsp;
+        Grouped by setup type, strongest first &nbsp;|&nbsp;
         Click any symbol to open TradingView chart.
     </p>
 """
@@ -211,16 +231,10 @@ _TABLE_HEAD = """\
             <tr>
                 <th>SL</th>
                 <th>Symbol</th>
-                <th>Signal</th>
-                <th>Stage</th>
-                <th>Close (&#8377;)</th>
-                <th>RSI</th>
-                <th>Vol</th>
-                <th>ATR14</th>
-                <th>Score</th>
-                <th>LLM Verdict</th>
-                <th>LLM Conf</th>
-                <th>AI Reasoning</th>
+                <th>Price (&#8377;)</th>
+                <th>Recommendation</th>
+                <th>Confidence</th>
+                <th>Why</th>
             </tr>
         </thead>
         <tbody>
@@ -263,12 +277,14 @@ def _report_sort_key(sig: dict) -> tuple:
     verdict = str(sig.get("llm_verdict") or "SKIPPED").upper()
     score = sig.get("swing_score") or sig.get("score") or 0
     confidence = sig.get("llm_confidence") or 0
+    rs_rating = sig.get("rs_rating") or 0
     risk = sig.get("entry_risk_pct") or 99
     extension = sig.get("ema20_extension_pct") or 99
     turnover = sig.get("turnover_cr") or 0
     return (
         verdict_rank.get(verdict, 9),
         -score,
+        -rs_rating,
         -confidence,
         risk,
         extension,
@@ -278,14 +294,8 @@ def _report_sort_key(sig: dict) -> tuple:
 _ROW = (
     "            <tr>"
     "<td class=\"slCell\"><span class=\"slNo\">{sl}</span><button class=\"watch-btn\" title=\"Add {sym} to watchlist\" onclick=\"addToWatchlist('{sym}', this); event.stopPropagation();\">+</button></td>"
-    "<td class=\"symbol\" onclick=\"openChart('{sym}')\" style=\"cursor:pointer\">{sym}</td>"
-    "<td bgcolor=\"{sig_c}\">{sig}</td>"
-    "<td bgcolor=\"{stg_c}\">{stg}</td>"
+    "<td class=\"symbol\" data-symbol=\"{sym}\" onclick=\"openChart('{sym}', this)\" style=\"cursor:pointer\">{sym}</td>"
     "<td>{close}</td>"
-    "<td bgcolor=\"{rsi_c}\">{rsi}</td>"
-    "<td bgcolor=\"{vol_c}\">{vol}</td>"
-    "<td>{atr}</td>"
-    "<td bgcolor=\"{sc_c}\">{score}</td>"
     "<td bgcolor=\"{llm_c}\"><b>{llm_v}</b></td>"
     "<td>{llm_conf}</td>"
     "<td class=\"reason {reason_class}\"><span class=\"reasonPreview\">{reasoning_preview}</span><span class=\"reasonFull\">{reasoning_full}</span></td>"
@@ -294,36 +304,6 @@ _ROW = (
 
 
 # == Colour helpers ============================================================
-
-def _signal_color(signal_type: str) -> str:
-    return {
-        "BREAKOUT": "#A9DFBF",
-        "PULLBACK": "#AED6F1",
-        "STAGE1": "#FDEBD0",
-        "WATCHLIST": "#EBDEF0",
-        "NEWS": "#FADBD8",
-    }.get(signal_type, "#FFFFFF")
-
-def _stage_color(stage: str) -> str:
-    return {"Stage2": "#A9DFBF", "Stage1": "#FDEBD0", "Stage3": "#F5CBA7"}.get(stage, "#FFFFFF")
-
-def _rsi_color(rsi: float) -> str:
-    if rsi is None:   return "#FFFFFF"
-    if rsi >= 70:     return "#F5B7B1"   # overbought - caution
-    if rsi >= 55:     return "#A9DFBF"   # ideal momentum zone
-    return "#FDEBD0"                      # below momentum threshold
-
-def _vol_color(vol: float) -> str:
-    if vol is None:   return "#FFFFFF"
-    if vol >= 2.0:    return "#A9DFBF"   # strong surge
-    if vol >= 1.5:    return "#FDFDA0"   # moderate
-    return "#FDEBD0"                      # weak
-
-def _score_color(score: int) -> str:
-    if score >= 13:   return "#239B56"   # dark green - very high conviction
-    if score >= 10:   return "#A9DFBF"   # green
-    if score >= 7:    return "#FDFDA0"   # yellow - qualifies, less strong
-    return "#FDEBD0"
 
 def _llm_color(verdict: str | None) -> str:
     return {
@@ -387,6 +367,16 @@ def _short_reason(text: str, limit: int = 76) -> str:
     return clean[: max(0, limit - 1)].rstrip() + "..."
 
 
+# Report sections, in display order. Each maps to a signal-type group and is
+# shown only when it has qualifying rows (a 0% category produces none).
+_REPORT_SECTIONS = (
+    ("breakout", "Breakouts", {"BREAKOUT", "PULLBACK"}),
+    ("prebreakout", "Pre-Breakout (about to move)", {"STAGE1"}),
+    ("news", "News Driven", {"NEWS"}),
+    ("others", "Others / Watchlist", {"WATCHLIST"}),
+)
+
+
 def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
     if not rows:
         return
@@ -394,10 +384,6 @@ def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
     modals = []
     for sl, s in enumerate(rows, 1):
         close = s.get("close")
-        rsi = s.get("rsi")
-        vol = s.get("vol_ratio")
-        atr = s.get("atr14")
-        score = s.get("score", 0)
         llm_v = s.get("llm_verdict") or "SKIPPED"
         llm_conf = s.get("llm_confidence")
         full_reasoning_text = s.get("llm_reasoning") or s.get("catalyst_summary") or "-"
@@ -414,18 +400,7 @@ def _write_signal_table(fh, title: str, rows: list[dict]) -> None:
         fh.write(_ROW.format(
             sl=sl,
             sym=escape(str(s.get("symbol", "?"))),
-            sig=escape(str(s.get("signal_type", "?"))),
-            sig_c=_signal_color(s.get("signal_type")),
-            stg=escape(str(s.get("stage", "?"))),
-            stg_c=_stage_color(s.get("stage")),
             close=f"{close:.2f}" if close is not None else "-",
-            rsi=f"{rsi:.1f}" if rsi is not None else "-",
-            rsi_c=_rsi_color(rsi),
-            vol=f"{vol:.2f}x" if vol is not None else "-",
-            vol_c=_vol_color(vol),
-            atr=f"{atr:.2f}" if atr is not None else "-",
-            score=score,
-            sc_c=_score_color(score),
             llm_v=escape(str(llm_v)),
             llm_c=_llm_color(llm_v),
             llm_conf=f"{llm_conf}/10" if llm_conf is not None else "-",
@@ -458,8 +433,6 @@ def render(
     report_date = scan_date or str(date.today())
     report_signals = [s for s in signals if _is_report_signal(s, include_weak)]
     sorted_sigs = sorted(report_signals, key=_report_sort_key)
-    technical_sigs = [s for s in sorted_sigs if str(s.get("signal_type") or "").upper() != "NEWS"]
-    news_sigs = [s for s in sorted_sigs if str(s.get("signal_type") or "").upper() == "NEWS"]
 
     fh = StringIO()
     fh.write(_PAGE_HEAD.format(
@@ -468,8 +441,9 @@ def render(
         raw_total=raw_total if raw_total is not None else len(signals),
         tradingview_base=_tradingview_base(tradingview_chart_id or TRADINGVIEW_CHART_ID),
     ))
-    _write_signal_table(fh, "Technical Analysis Shares", technical_sigs)
-    _write_signal_table(fh, "News Driven Shares", news_sigs)
+    for _key, title, signal_types in _REPORT_SECTIONS:
+        rows = [s for s in sorted_sigs if str(s.get("signal_type") or "").upper() in signal_types]
+        _write_signal_table(fh, title, rows)
     fh.write(_PAGE_FOOT)
     return fh.getvalue()
 

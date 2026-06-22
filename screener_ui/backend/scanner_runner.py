@@ -251,6 +251,10 @@ class ScannerJobManager:
         env["LLM_VALIDATION_LIMIT"] = str(settings["llm_validation_limit"])
         env["REPORT_INCLUDE_WEAK"] = "true" if settings["report_include_weak"] else "false"
         env["TRADINGVIEW_CHART_ID"] = settings["tradingview_chart_id"]
+        env["SCREENING_MODE"] = str(settings.get("screening_mode") or "confirmed")
+        for key in ("report_pct_breakout", "report_pct_news", "report_pct_prebreakout", "report_pct_others"):
+            if settings.get(key) is not None:
+                env[key.upper()] = str(settings[key])
         try:
             process = subprocess.Popen(
                 job.command,

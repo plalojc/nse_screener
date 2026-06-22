@@ -29,7 +29,7 @@ from analysis.catalyst_news import (
     fetch_and_store_catalysts,
     get_catalyst_map,
 )
-from analysis.technical import add_indicators
+from analysis.technical import add_indicators, relative_strength_ratings
 from analysis.grok_validator import validate_signals_grok_batch
 from agent.portfolio_tracker   import check_exit_signals
 from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATION_LIMIT,
@@ -40,7 +40,14 @@ from config import (LLM_FILL_TO_LIMIT, LLM_VALIDATION_LIMIT,
                     TOP_PICKS_MIN_SCORE, TOP_PICKS_MIN_VOL,
                     TOP_PICKS_RSI_MAX,
                     GROK_VALIDATOR_MODEL,
-                    MAX_CATALYST_CANDIDATES)
+                    MAX_CATALYST_CANDIDATES,
+                    PREFER_PRE_BREAKOUT,
+                    REQUIRE_RS_LEADERSHIP,
+                    BEST_MIN_RS,
+                    REPORT_PCT_BREAKOUT,
+                    REPORT_PCT_NEWS,
+                    REPORT_PCT_PREBREAKOUT,
+                    REPORT_PCT_OTHERS)
 
 init(autoreset=True)
 
@@ -63,7 +70,10 @@ def _rank_signal(sig: dict) -> tuple:
     """Built-in ranking before paid/remote LLM validation."""
     signal_type = str(sig.get("signal_type") or "").upper()
     stage = sig.get("stage")
-    if signal_type == "BREAKOUT" and stage == "Stage2":
+    if PREFER_PRE_BREAKOUT and signal_type == "STAGE1":
+        # "About to grow" mode: pre-breakout names rank above confirmed breakouts.
+        priority = 55
+    elif signal_type == "BREAKOUT" and stage == "Stage2":
         priority = 50
     elif signal_type == "STAGE1":
         priority = 40
@@ -84,6 +94,10 @@ def _rank_signal(sig: dict) -> tuple:
     catalyst_confidence = sig.get("catalyst_confidence") or 0
     pattern_score = sig.get("pattern_score") or 0
     score = sig.get("swing_score") or sig.get("score") or 0
+    # Relative-strength leadership: a breakout in a top-RS name outranks the same
+    # setup in a market laggard. Bucketed so it orders without dominating score.
+    rs_rating = sig.get("rs_rating") or 0
+    rs_bucket = int(rs_rating // 10)  # 0..9 (90s = strongest leaders)
     vol_ratio = sig.get("vol_ratio") or 0
     rsi = sig.get("rsi") or 99
     rsi_penalty = abs(65 - rsi)
@@ -93,6 +107,7 @@ def _rank_signal(sig: dict) -> tuple:
     return (
         priority,
         score + stage_bonus,
+        rs_bucket,
         catalyst_score,
         catalyst_confidence,
         pattern_score,
@@ -104,40 +119,43 @@ def _rank_signal(sig: dict) -> tuple:
     )
 
 
+def _report_category(sig: dict) -> str:
+    """Map a signal to one of the four admin-configurable report categories."""
+    signal_type = str(sig.get("signal_type") or "").upper()
+    if signal_type == "NEWS":
+        return "news"
+    if signal_type == "STAGE1":
+        return "prebreakout"
+    if signal_type in {"BREAKOUT", "PULLBACK"}:
+        return "breakout"
+    return "others"  # WATCHLIST and anything else
+
+
 def _select_llm_candidates(signals: list[dict]) -> list[dict]:
     """
-    Pick top unique symbols for LLM validation using quota buckets:
-      - 60% technical: BREAKOUT / STAGE1 / PULLBACK
-      - 30% news-driven: NEWS
-      - 10% fallback/watchlist: WATCHLIST and anything left
+    Pick top unique symbols for LLM validation using admin-configured category
+    percentages (REPORT_PCT_*): breakout / news / prebreakout / others.
 
-    Unused quota is backfilled by the strongest remaining candidates, so the
-    admin limit is still used as fully as possible.
+    A category at 0% is excluded. Unused quota is backfilled by the strongest
+    remaining candidates so the admin AI limit is still used as fully as possible.
     """
     if LLM_VALIDATION_LIMIT <= 0 or len(signals) <= LLM_VALIDATION_LIMIT:
         return signals
 
-    def category(sig: dict) -> str:
-        signal_type = str(sig.get("signal_type") or "").upper()
-        if signal_type == "NEWS":
-            return "news"
-        if signal_type == "WATCHLIST":
-            return "fallback"
-        if signal_type in {"BREAKOUT", "STAGE1", "PULLBACK"}:
-            return "technical"
-        return "fallback"
-
     limit = LLM_VALIDATION_LIMIT
-    quotas = {
-        "technical": int(limit * 0.60),
-        "news": int(limit * 0.30),
+    weights = {
+        "breakout": max(0, REPORT_PCT_BREAKOUT),
+        "news": max(0, REPORT_PCT_NEWS),
+        "prebreakout": max(0, REPORT_PCT_PREBREAKOUT),
+        "others": max(0, REPORT_PCT_OTHERS),
     }
-    quotas["fallback"] = max(0, limit - quotas["technical"] - quotas["news"])
+    total_weight = sum(weights.values()) or 1
+    quotas = {cat: int(limit * weight / total_weight) for cat, weight in weights.items()}
 
-    selected_symbols = []
-    selected_set = set()
+    selected_symbols: list[str] = []
+    selected_set: set[str] = set()
 
-    def add_from(candidates: list[dict], quota: int) -> int:
+    def add_from(candidates: list[dict], quota: int) -> None:
         added = 0
         for sig in sorted(candidates, key=_rank_signal, reverse=True):
             if added >= quota or len(selected_symbols) >= limit:
@@ -148,31 +166,18 @@ def _select_llm_candidates(signals: list[dict]) -> list[dict]:
             selected_symbols.append(symbol)
             selected_set.add(symbol)
             added += 1
-        return added
 
-    buckets = {"technical": [], "news": [], "fallback": []}
+    buckets: dict[str, list[dict]] = {cat: [] for cat in weights}
     for sig in signals:
-        buckets[category(sig)].append(sig)
+        buckets[_report_category(sig)].append(sig)
 
-    add_from(buckets["technical"], quotas["technical"])
-    add_from(buckets["news"], quotas["news"])
-    add_from(buckets["fallback"], quotas["fallback"])
+    for cat in weights:
+        add_from(buckets[cat], quotas[cat])
 
     remaining_slots = limit - len(selected_symbols)
     if remaining_slots > 0:
-        remaining = [
-            sig for sig in signals
-            if sig.get("symbol") and sig.get("symbol") not in selected_set
-        ]
+        remaining = [s for s in signals if s.get("symbol") not in selected_set]
         add_from(remaining, remaining_slots)
-
-    for sig in signals:
-        symbol = sig.get("symbol")
-        if symbol and symbol not in selected_set and len(selected_symbols) < limit:
-            selected_symbols.append(symbol)
-            selected_set.add(symbol)
-        if len(selected_symbols) >= limit:
-            break
 
     return [sig for sig in signals if sig.get("symbol") in selected_set]
 
@@ -323,9 +328,11 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
     phase_started = time.perf_counter()
     _flow(f"Phase ohlcv-bulk-load started | symbols={len(scan_universe)}")
     ohlcv_by_symbol = load_bhavcopy_ohlcv_bulk(scan_universe, upto_date=target_date)
+    # Cross-sectional relative strength (1-99) across the whole loaded universe.
+    rs_map = relative_strength_ratings(ohlcv_by_symbol)
     _flow(
         f"Phase ohlcv-bulk-load completed in {_elapsed(phase_started)} "
-        f"| loaded={len(ohlcv_by_symbol)}"
+        f"| loaded={len(ohlcv_by_symbol)} rs_rated={len(rs_map)}"
     )
     use_breakout = not SCAN_SIGNAL_TYPES or "BREAKOUT" in SCAN_SIGNAL_TYPES
     use_pullback = "PULLBACK" in SCAN_SIGNAL_TYPES
@@ -404,6 +411,20 @@ def run_daily_scan(symbols: list = None, scan_date: str = None,
                     news_fill_candidates.append(sig)
                 else:
                     signals.append(sig)
+
+    # Attach relative-strength rating to every candidate so ranking/LLM can use it.
+    for bucket in (signals, news_fill_candidates, watchlist_fill_candidates):
+        for sig in bucket:
+            sig["rs_rating"] = rs_map.get(sig.get("symbol"))
+
+    # "best" mode keeps only relative-strength leaders for the momentum
+    # categories (technical + watchlist). News is catalyst-driven and exempt:
+    # a fresh catalyst stock is usually not a momentum leader yet.
+    if REQUIRE_RS_LEADERSHIP:
+        before = len(signals)
+        signals = [s for s in signals if (s.get("rs_rating") or 0) >= BEST_MIN_RS]
+        watchlist_fill_candidates = [s for s in watchlist_fill_candidates if (s.get("rs_rating") or 0) >= BEST_MIN_RS]
+        print(Fore.CYAN + f"   RS filter : best mode kept {len(signals)}/{before} momentum signals with RS>={BEST_MIN_RS} (news exempt)")
 
     _flow(
         f"Phase technical-scan completed in {_elapsed(phase_started)} "

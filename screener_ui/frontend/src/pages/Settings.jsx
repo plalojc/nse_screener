@@ -16,7 +16,12 @@ export function Settings() {
   const [form, setForm] = useState({
     tradingview_chart_id: "IMppZ0T",
     llm_validation_limit: 100,
-    report_include_weak: false
+    report_include_weak: false,
+    screening_mode: "confirmed",
+    report_pct_breakout: 50,
+    report_pct_news: 30,
+    report_pct_prebreakout: 10,
+    report_pct_others: 10
   });
 
   useEffect(() => {
@@ -25,6 +30,11 @@ export function Settings() {
         tradingview_chart_id: data.tradingview_chart_id || "IMppZ0T",
         llm_validation_limit: data.llm_validation_limit ?? 100,
         report_include_weak: Boolean(data.report_include_weak),
+        screening_mode: data.screening_mode || "confirmed",
+        report_pct_breakout: data.report_pct_breakout ?? 50,
+        report_pct_news: data.report_pct_news ?? 30,
+        report_pct_prebreakout: data.report_pct_prebreakout ?? 10,
+        report_pct_others: data.report_pct_others ?? 10,
         is_admin: Boolean(data.is_admin)
       });
     }
@@ -37,7 +47,12 @@ export function Settings() {
       body: JSON.stringify({
         tradingview_chart_id: form.tradingview_chart_id,
         llm_validation_limit: Number(form.llm_validation_limit),
-        report_include_weak: Boolean(form.report_include_weak)
+        report_include_weak: Boolean(form.report_include_weak),
+        screening_mode: form.screening_mode || "confirmed",
+        report_pct_breakout: Number(form.report_pct_breakout),
+        report_pct_news: Number(form.report_pct_news),
+        report_pct_prebreakout: Number(form.report_pct_prebreakout),
+        report_pct_others: Number(form.report_pct_others)
       })
     });
     setForm(next);
@@ -86,6 +101,56 @@ export function Settings() {
           </label>
           {form.is_admin && (
             <>
+              <label>
+                Screening strategy
+                <select
+                  value={form.screening_mode || "confirmed"}
+                  onChange={(e) => setForm({ ...form, screening_mode: e.target.value })}
+                >
+                  <option value="confirmed">Confirmed: classic breakout behaviour (default)</option>
+                  <option value="best">Best: only relative-strength leaders (fewer, highest quality)</option>
+                  <option value="both">Both: early names first + tighter breakouts (recommended)</option>
+                  <option value="pre_breakout">Pre-breakout: rank "about to break out" names first</option>
+                  <option value="early_breakout">Early breakout: only fresh breaks, reject extended</option>
+                </select>
+                <span className="fieldHint">
+                  Controls how early the scanner triggers and how strict it is. "Best" keeps only
+                  market-leading stocks (top relative strength) for maximum swing-trade quality;
+                  "Both" catches stocks before they run and hides already-extended breakouts.
+                </span>
+              </label>
+              <fieldset className="reportMix">
+                <legend>Report composition (% of each category)</legend>
+                <label>
+                  Breakouts %
+                  <input type="number" min="0" max="100"
+                    value={form.report_pct_breakout ?? 50}
+                    onChange={(e) => setForm({ ...form, report_pct_breakout: e.target.value })} />
+                </label>
+                <label>
+                  News %
+                  <input type="number" min="0" max="100"
+                    value={form.report_pct_news ?? 30}
+                    onChange={(e) => setForm({ ...form, report_pct_news: e.target.value })} />
+                </label>
+                <label>
+                  Pre-breakout %
+                  <input type="number" min="0" max="100"
+                    value={form.report_pct_prebreakout ?? 10}
+                    onChange={(e) => setForm({ ...form, report_pct_prebreakout: e.target.value })} />
+                </label>
+                <label>
+                  Others %
+                  <input type="number" min="0" max="100"
+                    value={form.report_pct_others ?? 10}
+                    onChange={(e) => setForm({ ...form, report_pct_others: e.target.value })} />
+                </label>
+                <span className="fieldHint">
+                  Share of each category in the report. Set a category to 0 to exclude it.
+                  Values are normalised, so they need not total exactly 100.
+                  Current total: {Number(form.report_pct_breakout || 0) + Number(form.report_pct_news || 0) + Number(form.report_pct_prebreakout || 0) + Number(form.report_pct_others || 0)}%.
+                </span>
+              </fieldset>
               <label>
                 Stocks to review with AI
                 <input

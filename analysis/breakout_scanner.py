@@ -11,7 +11,8 @@ from config import (VOLUME_SURGE_FACTOR, RSI_BREAKOUT_MIN,
                     MIN_CLOSE_RANGE_POS, MIN_STAGE1_SCORE,
                     STAGE1_NEAR_BREAKOUT_PCT, STAGE1_RSI_MIN,
                     STAGE1_RSI_MAX, MIN_WATCHLIST_SCORE,
-                    MIN_WATCHLIST_TURNOVER_CR, WATCHLIST_NEAR_HIGH_PCT)
+                    MIN_WATCHLIST_TURNOVER_CR, WATCHLIST_NEAR_HIGH_PCT,
+                    MAX_BREAKOUT_ABOVE_TRIGGER_PCT)
 
 
 INDICATOR_COLUMNS = {
@@ -287,6 +288,14 @@ def is_breakout(df: pd.DataFrame) -> dict | None:
         reasons.append("Fresh 20d breakout")
     if not has_price_breakout:
         return None
+
+    # 1b. Freshness cap. In early/both/best modes reject breakouts that have
+    # already run far past their trigger high (avoids buying extended / ATH spikes).
+    trigger_high = high_55d if breakout_lookback == 55 else high_20d
+    if trigger_high and not pd.isna(trigger_high) and trigger_high > 0:
+        above_trigger_pct = (close - trigger_high) / trigger_high * 100
+        if above_trigger_pct > MAX_BREAKOUT_ABOVE_TRIGGER_PCT:
+            return None
 
     # 2. Volume expansion. Penalize likely exhaustion spikes.
     if 1.8 <= vol_ratio <= 5.0:

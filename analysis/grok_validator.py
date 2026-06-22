@@ -56,6 +56,7 @@ def _build_payload(batch: list[dict]) -> list[dict]:
             "vol_ratio": _safe_round(sig.get("vol_ratio")),
             "score": sig.get("score"),
             "swing_score": sig.get("swing_score"),
+            "rs_rating": sig.get("rs_rating"),
             "stage": sig.get("stage"),
             "breakout_lookback": sig.get("breakout_lookback"),
             "turnover_cr": _safe_round(sig.get("turnover_cr")),
@@ -91,46 +92,64 @@ def _build_payload(batch: list[dict]) -> list[dict]:
 def _build_prompt(batch: list[dict]) -> str:
     stock_data = _build_payload(batch)
     return f"""
-You are validating NSE India swing-trade signals in batches.
-Judge every stock independently. Do not let one stock's news affect another stock.
+You are a disciplined swing-trade analyst grading NSE India setups for a 2-4 week
+hold. Judge every stock INDEPENDENTLY. Do not let one stock's news affect another.
+Be SELECTIVE: a good screener confirms only the strongest minority of candidates.
+As a rough guide, CONFIRM roughly the top 20-30%, WEAK the middle, REJECT the rest.
+Quality over quantity - it is correct to reject most names on a weak day.
 
-INPUT DATA:
+INPUT DATA (one object per stock):
 {json.dumps(stock_data, indent=2)}
 
-For EACH stock, evaluate these dimensions:
-1. Technical quality:
-   - Stage2 is preferred; reject/penalize Stage3 parabolic moves.
-   - STAGE1 signals are pre-breakout/watchlist setups, not confirmed breakouts.
-     For STAGE1, look for base quality, compression, near-breakout positioning,
-     improving volume, and a real catalyst before giving CONFIRM.
-   - WATCHLIST signals are lower-priority fill candidates. Treat CONFIRM as
-     "worth monitoring closely", not as a ready trade.
-   - NEWS signals are catalyst-driven candidates. Validate whether the stated
-     catalyst is real, timely, material, and positive enough to justify review.
-     Policy/theme mappings are candidate generation hints; verify that the
-     company is a reasonable beneficiary before confirming.
-   - Prior 55-day breakouts are preferred over weaker 20-day breakouts for a 2-4 week swing.
-   - Healthy RSI is usually 55-75. RSI above 80 is overextended.
-   - Volume confirmation is strong above 1.8x and weak below 1.5x.
-   - Price should not be too extended above EMA20/EMA50; entries >10% above EMA20 are risky.
-   - Entry risk near/under 6% is preferred; wide stops make a 2R target harder within 2-4 weeks.
-   - Above EMA200 is a positive macro-trend filter.
-2. Catalyst:
-   - Search web and X for last 7 days: earnings/results, order wins, contracts,
-     guidance, capex, regulatory approvals, policy/sector tailwinds, analyst action.
-   - If there is no reliable current catalyst, do not invent one.
-3. Red flags:
+KEY FIELD - rs_rating (1-99): cross-sectional Relative Strength vs the whole NSE
+universe scanned today. 99 = strongest price momentum, 50 = median, low = laggard.
+This is a leadership signal: prefer leaders, be skeptical of breakouts in laggards.
+
+For EACH stock, evaluate:
+1. Leadership / relative strength:
+   - rs_rating >= 80 is a true leader (favourable). 60-80 is acceptable.
+   - rs_rating < 50 is a market laggard: a breakout here is lower quality - lean WEAK/REJECT
+     unless a strong, specific catalyst justifies it.
+2. Technical quality:
+   - Stage2 preferred; penalize Stage3 parabolic/overextended moves.
+   - STAGE1 = pre-breakout/watchlist base, NOT a confirmed breakout. Want tight
+     compression, near-breakout positioning, improving volume, ideally a catalyst.
+   - WATCHLIST = lower-priority fill; CONFIRM only means "monitor closely".
+   - NEWS = catalyst-driven; confirm the company is a real beneficiary.
+   - Prior 55-day breakouts beat weaker 20-day breakouts for a 2-4 week swing.
+   - Healthy RSI ~55-75; above 80 is overextended.
+   - Volume strong above 1.8x, weak below 1.5x.
+   - Not too extended: entries >10% above EMA20 are risky; fresh breaks near the
+     trigger are higher quality than ones that already ran.
+   - Entry risk near/under 6% preferred; wide stops make a 2R target harder.
+   - Close above EMA200 is a positive macro-trend filter.
+3. Catalyst (assess, do NOT browse):
+   - You do NOT have live web access in this call. Judge the catalyst ONLY from the
+     provided 'catalyst' fields plus durable knowledge. Do NOT fabricate or assume
+     recent news that is not given. Live web/X verification is handled by a
+     separate downstream layer.
+   - If the provided catalyst is empty or unconvincing, set catalyst=null and judge
+     mostly from technicals + relative strength.
+4. Red flags (any serious one => normally REJECT):
    - SEBI/regulatory probe, fraud, pledge/promoter selling, auditor resignation,
      court action, major downgrade, severe earnings miss, order cancellation.
-   - Any serious red flag should normally be REJECT.
-4. Liquidity/tradability:
-   - Be cautious with very low-price or illiquid names where the volume spike may be noisy.
-   - Prefer clean participation over one-off speculative spikes.
-5. Risk/reward:
-   - Judge whether ATR/swing-low stop is logical and whether a 2R target is realistic.
-   - Penalize setups that are already far above moving averages.
-6. Instrument validity:
-   - Reject ETFs, bonds, SGBs, mutual funds, index funds, warrants, rights, and non-equity instruments.
+5. Liquidity/tradability:
+   - Be cautious with low-price/illiquid names where a volume spike may be noise.
+   - Prefer clean institutional participation over one-off speculative spikes.
+6. Risk/reward:
+   - Is the ATR/swing-low stop logical and a 2R target realistic within 2-4 weeks?
+   - Penalize setups already far above moving averages.
+7. Instrument validity:
+   - Reject ETFs, bonds, SGBs, mutual funds, index funds, warrants, rights, and
+     any non-equity instrument.
+
+CONFIDENCE SCALE (integer 0-10) - calibrate, do not default to the middle:
+   9-10 = textbook leader, clean setup, low risk, real edge
+   7-8  = strong, minor caveat
+   5-6  = mixed / borderline (usually WEAK)
+   2-4  = weak setup or notable concern
+   0-1  = clear reject / invalid
+Confidence must agree with the verdict (CONFIRM>=7, WEAK 4-6, REJECT<=3).
 
 Return ONLY valid JSON matching this exact schema:
 {{
@@ -138,9 +157,9 @@ Return ONLY valid JSON matching this exact schema:
     {{
       "symbol": "TICKER",
       "verdict": "CONFIRM" | "WEAK" | "REJECT",
-      "confidence": 1,
-      "reasoning": "One concise sentence with the main reason for the verdict.",
-      "catalyst": "Specific current catalyst, or null",
+      "confidence": 8,
+      "reasoning": "One concise sentence with the main reason, citing RS/leadership when relevant.",
+      "catalyst": "Specific catalyst from input, or null",
       "risk": "Main risk, or null",
       "is_valid_equity": true
     }}
@@ -148,18 +167,18 @@ Return ONLY valid JSON matching this exact schema:
 }}
 
 Rules:
-- The evaluations array MUST contain exactly {len(batch)} items.
-- Do not skip any stock.
-- Do not add extra symbols.
-- Use the exact symbol strings from the input.
-- CONFIRM: valid equity, strong technical setup, no major red flags, and either a clear catalyst or exceptional price/volume confirmation.
-- WEAK: valid setup but missing catalyst, mixed/uncertain news, borderline RSI/volume/stage, uncertain liquidity, or stretched entry.
-- REJECT: invalid/non-equity instrument, serious negative news, poor liquidity, parabolic/overextended move, weak technicals, or misleading volume spike.
-- For STAGE1, CONFIRM means "strong watchlist candidate", not immediate breakout confirmation.
-- For WATCHLIST, be stricter: use CONFIRM only when news/catalyst plus technicals are unusually strong.
-- For NEWS, mention the catalyst category in reasoning and reject stale/immaterial/negative items.
-- If no reliable current news is found, set catalyst=null and judge mostly from technicals.
-- If uncertain, prefer WEAK over CONFIRM.
+- The evaluations array MUST contain exactly {len(batch)} items, one per input symbol.
+- Do not skip any stock, do not add extra symbols, use the exact input symbol strings.
+- CONFIRM: valid equity, leader or strong RS, clean technical setup, no major red
+  flags, and either a credible catalyst or exceptional price/volume confirmation.
+- WEAK: valid but missing catalyst, laggard RS, borderline RSI/volume/stage,
+  uncertain liquidity, or stretched/extended entry.
+- REJECT: invalid/non-equity, serious negative news, poor liquidity, parabolic or
+  overextended move, weak technicals, clear laggard, or misleading volume spike.
+- For STAGE1, CONFIRM means "strong watchlist candidate", not breakout confirmation.
+- For WATCHLIST, be stricter: CONFIRM only when RS + technicals are unusually strong.
+- For NEWS, name the catalyst category in reasoning; reject stale/immaterial/negative items.
+- When genuinely uncertain, prefer WEAK over CONFIRM.
 """.strip()
 
 

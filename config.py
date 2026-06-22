@@ -32,6 +32,14 @@ REPORT_INCLUDE_WEAK = _env_bool("REPORT_INCLUDE_WEAK", False)
 SCAN_TIME_IST = os.getenv("SCAN_TIME_IST", "08:20")
 TRADINGVIEW_CHART_ID = os.getenv("TRADINGVIEW_CHART_ID", "IMppZ0T")
 
+# Report composition (admin-controlled). Percentage each category gets of the
+# AI-review limit; a category at 0 is excluded from the report entirely.
+# Values are normalised at use, so they need not sum to exactly 100.
+REPORT_PCT_BREAKOUT = _env_int("REPORT_PCT_BREAKOUT", 50)      # BREAKOUT + PULLBACK
+REPORT_PCT_NEWS = _env_int("REPORT_PCT_NEWS", 30)             # NEWS / catalyst
+REPORT_PCT_PREBREAKOUT = _env_int("REPORT_PCT_PREBREAKOUT", 10)  # STAGE1
+REPORT_PCT_OTHERS = _env_int("REPORT_PCT_OTHERS", 10)        # WATCHLIST / fallback
+
 
 # == Internal application defaults =========================================
 # Keep these out of env.example. They are product defaults now, and later the
@@ -50,7 +58,7 @@ DB_BACKEND = os.getenv(
 DB_SYSTEM_SCHEMA = os.getenv("DB_SYSTEM_SCHEMA", "system").strip() or "system"
 DB_USER_SCHEMA = os.getenv("DB_USER_SCHEMA", "app_user").strip() or "app_user"
 
-REPORT_SIGNAL_TYPES = {"BREAKOUT", "STAGE1", "PULLBACK", "NEWS"}
+REPORT_SIGNAL_TYPES = {"BREAKOUT", "STAGE1", "PULLBACK", "NEWS", "WATCHLIST"}
 REPORT_INCLUDE_REJECTED = False
 REPORT_INCLUDE_SKIPPED = False
 
@@ -71,6 +79,37 @@ MIN_STAGE1_SCORE = 6
 STAGE1_NEAR_BREAKOUT_PCT = 5.0
 STAGE1_RSI_MIN = 45.0
 STAGE1_RSI_MAX = 68.0
+
+# == Screening strategy mode (admin-controlled) =============================
+# Controls how early in a move the scanner triggers. Set from the admin
+# Settings UI -> injected as SCREENING_MODE env var for each scan subprocess.
+#   confirmed      - legacy behaviour: confirmed breakouts ranked first
+#   pre_breakout   - rank STAGE1 "about to break out" names above breakouts
+#   early_breakout - tighten breakout filters so only fresh breaks pass
+#   both           - pre-breakout names first AND tightened breakout (recommended)
+#   best           - both + only relative-strength leaders (fewer, higher quality)
+# Default stays "confirmed" (legacy behaviour); admin opts into the others.
+SCREENING_MODE = os.getenv("SCREENING_MODE", "confirmed").strip().lower()
+if SCREENING_MODE not in {"confirmed", "pre_breakout", "early_breakout", "both", "best"}:
+    SCREENING_MODE = "confirmed"
+
+PREFER_PRE_BREAKOUT = SCREENING_MODE in {"pre_breakout", "both", "best"}
+_TIGHTEN_BREAKOUT = SCREENING_MODE in {"early_breakout", "both", "best"}
+
+# "best" mode keeps only relative-strength leaders (top momentum vs the universe).
+REQUIRE_RS_LEADERSHIP = SCREENING_MODE == "best"
+# Minimum RS rating (1-99) a signal must clear in "best" mode. 70 ≈ top 30%.
+BEST_MIN_RS = _env_int("BEST_MIN_RS", 70)
+
+# Max % a breakout close may sit ABOVE its trigger high before it is treated as
+# "already extended" and rejected. 99 disables the cap (legacy modes).
+MAX_BREAKOUT_ABOVE_TRIGGER_PCT = 3.0 if _TIGHTEN_BREAKOUT else 99.0
+
+if _TIGHTEN_BREAKOUT:
+    # Reject extended entries: closer to EMA20, no blow-off candle, not yet overbought.
+    MAX_EMA20_EXTENSION_PCT = 6.0
+    MAX_DAY_RANGE_ATR = 2.0
+    RSI_OVERBOUGHT = 72.0
 
 TOP_PICKS_COUNT = 7
 TOP_PICKS_MIN_SCORE = 10

@@ -106,6 +106,55 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def relative_strength_ratings(
+    ohlcv_by_symbol: dict,
+    short: int = 63,
+    long: int = 126,
+) -> dict[str, float]:
+    """Cross-sectional Relative Strength rating (1-99) across the scanned universe.
+
+    For each symbol we blend recent (≈3-month) and medium (≈6-month) price
+    momentum, then percentile-rank every symbol against the whole universe.
+    This is the IBD/Minervini "leadership" measure the per-stock scanners cannot
+    see in isolation: a breakout in a top-RS leader is far higher quality than
+    the same breakout in a market laggard. No index series is required.
+
+    Returns {symbol: rs_rating} where 99 = strongest momentum in the universe.
+    """
+    momentum: dict[str, float] = {}
+    for symbol, df in ohlcv_by_symbol.items():
+        if df is None or "close" not in df or len(df) < short + 5:
+            continue
+        closes = pd.to_numeric(df["close"], errors="coerce").to_numpy()
+        last = closes[-1]
+        if not np.isfinite(last) or last <= 0:
+            continue
+        ref_short = closes[-short] if len(closes) >= short else np.nan
+        ref_long = closes[-long] if len(closes) >= long else np.nan
+        if not np.isfinite(ref_short) or ref_short <= 0:
+            continue
+        r_short = last / ref_short - 1.0
+        if np.isfinite(ref_long) and ref_long > 0:
+            r_long = last / ref_long - 1.0
+            mom = 0.6 * r_short + 0.4 * r_long
+        else:
+            mom = r_short
+        if np.isfinite(mom):
+            momentum[symbol] = float(mom)
+
+    if not momentum:
+        return {}
+
+    symbols = list(momentum.keys())
+    values = np.array([momentum[s] for s in symbols], dtype=float)
+    # Rank ascending so the highest momentum maps to ~99.
+    order = values.argsort(kind="mergesort")
+    ranks = np.empty(len(values), dtype=float)
+    ranks[order] = np.arange(len(values))
+    denom = max(1, len(values) - 1)
+    return {s: round(1.0 + 98.0 * ranks[i] / denom, 1) for i, s in enumerate(symbols)}
+
+
 def get_stage(df: pd.DataFrame) -> str:
     """Classify stock phase: Stage1 / Stage2 / Stage3."""
     last = df.iloc[-1]
