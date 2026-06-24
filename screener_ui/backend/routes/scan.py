@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..auth import CurrentUser, current_user, verify_token
+from ..auth import CurrentUser, current_user, require_admin, verify_token
 from ..reports import report_exists
 from ..runtime import jobs
 from ..scanner_runner import public_message, sse_event
@@ -54,7 +54,7 @@ def _effective_report_date(scan_date: str | None) -> str:
 
 
 @router.post("/run")
-def run_scan(payload: ScanRequest, user: CurrentUser = Depends(current_user)) -> dict[str, Any]:
+def run_scan(payload: ScanRequest, user: CurrentUser = Depends(require_admin)) -> dict[str, Any]:
     effective_date = _effective_report_date(payload.scan_date)
     if report_exists(effective_date):
         return {

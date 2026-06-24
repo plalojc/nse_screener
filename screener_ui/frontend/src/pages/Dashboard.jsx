@@ -120,7 +120,8 @@ export function Dashboard({ user }) {
         />
       </div>
 
-      <div className={isAdmin ? "twoCol" : "singleCol"}>
+      {isAdmin && (
+      <div className="twoCol">
         <div className="panel">
           <div className="panelHeader">
             <h2>Scanner</h2>
@@ -145,8 +146,7 @@ export function Dashboard({ user }) {
           <Progress job={job || data?.latest_job} />
         </div>
 
-        {isAdmin && (
-          <div className="panel">
+        <div className="panel">
             <div className="panelHeader">
               <h2>Schedule</h2>
               <button onClick={saveSchedule} disabled={busyAction === "schedule"}><CalendarClock size={16} />{busyAction === "schedule" ? "Saving..." : "Save"}</button>
@@ -178,8 +178,8 @@ export function Dashboard({ user }) {
               <strong>{data?.latest_report?.filename || "-"}</strong>
             </div>
           </div>
-        )}
       </div>
+      )}
     </section>
   );
 }

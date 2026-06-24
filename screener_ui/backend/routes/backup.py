@@ -15,6 +15,7 @@ from typing import Iterable
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from config import DATABASE_URL, DB_PATH, NSE_BHAVCOPY_DB_PATH
 from data.db_backend import connect, execute, is_postgres
@@ -23,6 +24,16 @@ from ..settings import AGENT_ROOT, UI_DB_PATH
 
 
 router = APIRouter(prefix="/backup")
+
+
+def _temp_file_response(path: Path, media_type: str, temp_dir: Path) -> FileResponse:
+    """Stream a backup file, then delete its temp dir once the response is sent."""
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=path.name,
+        background=BackgroundTask(shutil.rmtree, temp_dir, ignore_errors=True),
+    )
 
 
 def _snapshot_sqlite(src: Path, dst: Path) -> None:
@@ -88,11 +99,7 @@ def _postgres_json_backup(timestamp: str, temp_dir: Path) -> FileResponse:
             manifest["tables"].append({"schema": schema, "table": table_name, "rows": len(payload), "file": archive_name})
             backup_zip.writestr(archive_name, json.dumps(payload, indent=2, ensure_ascii=False))
         backup_zip.writestr("manifest.json", json.dumps(manifest, indent=2))
-    return FileResponse(
-        zip_path,
-        media_type="application/zip",
-        filename=zip_path.name,
-    )
+    return _temp_file_response(zip_path, "application/zip", temp_dir)
 
 
 def _postgres_backup(timestamp: str, temp_dir: Path) -> FileResponse:
@@ -112,11 +119,7 @@ def _postgres_backup(timestamp: str, temp_dir: Path) -> FileResponse:
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "pg_dump failed").strip()
         raise HTTPException(status_code=500, detail=f"Postgres backup failed: {message[:500]}")
-    return FileResponse(
-        dump_path,
-        media_type="application/octet-stream",
-        filename=dump_path.name,
-    )
+    return _temp_file_response(dump_path, "application/octet-stream", temp_dir)
 
 
 @router.get("")
@@ -139,8 +142,4 @@ def download_backup(admin: CurrentUser = Depends(require_admin)) -> FileResponse
             else:
                 backup_zip.write(source_path, archive_name)
 
-    return FileResponse(
-        zip_path,
-        media_type="application/zip",
-        filename=zip_path.name,
-    )
+    return _temp_file_response(zip_path, "application/zip", temp_dir)

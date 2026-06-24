@@ -143,10 +143,17 @@ _PAGE_HEAD = """\
             }}
         }}
         window.addEventListener("DOMContentLoaded", restoreClicked);
+        function tvBase() {{
+            // Per-viewer TradingView layout. The host page (Reports) replaces the
+            // expression below with the logged-in user's chart id, so a single
+            // cached report still opens each user's own layout. Falls back to the
+            // baked default when opened standalone.
+            var id = new URLSearchParams(window.location.search).get("tv") || "";
+            return id ? "https://in.tradingview.com/chart/" + id + "/" : "{tradingview_base}";
+        }}
         function openChart(symbol, cell) {{
             markClicked(symbol, cell);
-            var base = "{tradingview_base}";
-            var url = base + "?symbol=NSE:" + symbol;
+            var url = tvBase() + "?symbol=NSE:" + symbol;
             var left = (screen.width  / 2) - 600;
             var top  = (screen.height / 2) - 300;
             window.open(url, symbol, "height=600,width=1200,top=" + top + ",left=" + left);

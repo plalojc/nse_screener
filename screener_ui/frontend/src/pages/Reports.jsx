@@ -89,10 +89,16 @@ export function Reports({ user }) {
       }
       const html = await response.text();
       const token = JSON.stringify(getAccessToken());
-      return html.replace(
-        'new URLSearchParams(window.location.search).get("token") || ""',
-        token
-      );
+      const chartId = JSON.stringify(cache.settings?.data?.tradingview_chart_id || "");
+      return html
+        .replace(
+          'new URLSearchParams(window.location.search).get("token") || ""',
+          token
+        )
+        .replace(
+          'new URLSearchParams(window.location.search).get("tv") || ""',
+          chartId
+        );
     }, { force: true }).catch(() => {});
   }, [selected?.date, selected?.kind]);
 

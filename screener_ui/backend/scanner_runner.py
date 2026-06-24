@@ -215,10 +215,27 @@ def infer_progress(line: str, current: int) -> int:
     return current
 
 
+# Most recent scan runs kept in memory for status polling. Durable history
+# lives in the DB; the UI only ever reads the active job + the latest one.
+MAX_TRACKED_JOBS = 10
+
+
 class ScannerJobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, ScanJob] = {}
         self._lock = threading.Lock()
+
+    def _prune_jobs(self) -> None:
+        """Evict oldest finished jobs so _jobs stays bounded. Caller holds the lock."""
+        excess = len(self._jobs) - MAX_TRACKED_JOBS
+        if excess <= 0:
+            return
+        for job_id, job in list(self._jobs.items()):  # insertion order = oldest first
+            if excess <= 0:
+                break
+            if job.status not in {"queued", "running"}:
+                del self._jobs[job_id]
+                excess -= 1
 
     def start_scan(self, scan_date: str | None = None, force_refresh: bool = False, user_email: str | None = None) -> ScanJob:
         with self._lock:
@@ -234,6 +251,7 @@ class ScannerJobManager:
                 command.append("--force-refresh")
             job = ScanJob(id=job_id, command=command, user_email=user_email)
             self._jobs[job_id] = job
+            self._prune_jobs()
 
         thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
         thread.start()
